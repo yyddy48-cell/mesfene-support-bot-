@@ -17,29 +17,22 @@
 //       /reply <chat_id> <your message>
 //
 // Required environment variables (Netlify -> Environment variables):
-//   TELEGRAM_BOT_TOKEN  -> the token @BotFather gave you
-//   ADMIN_CHAT_ID       -> YOUR personal Telegram numeric chat id
+//   TELEGRAM_BOT_TOKEN
+//   ADMIN_CHAT_ID
 //
-// Session (which step each student is on) is stored in Netlify Blobs,
-// so it survives between messages even though each webhook call is a
-// fresh, stateless function run. Requires the @netlify/blobs package
-// (see package.json) — Netlify installs it automatically on deploy.
+// Session (which step each student is on) is stored in the same
+// Firebase Realtime Database used by the quiz sites, under its own
+// /bot_sessions path — no extra service or package needed.
 //
-// After deploying, set the webhook once by visiting in a browser:
-//   https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook?url=<YOUR_NETLIFY_SITE>/.netlify/functions/telegram-webhook
-//
-
-const { getStore } = require("@netlify/blobs");
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 const ACCOUNT_NUMBER = "1000102646437";
+const DB_URL = "https://chemistry-quiz-b0389-default-rtdb.firebaseio.com";
 
-// ---- Price by number of units selected (1-6) ----
 const PRICE_TABLE = { 1: 50, 2: 80, 3: 125, 4: 160, 5: 210, 6: 260 };
 const MAX_UNITS = 6;
 
-// ---- Subjects offered per track ----
 const SUBJECTS = {
   social: [
     { key: "mathematics", label: "Mathematics" },
@@ -55,31 +48,28 @@ const SUBJECTS = {
   ],
 };
 
-const GRADES = ["9", "10", "11", "12"];
-
-// ---- Site links per "grade|subject" combo ----
 // Fill these in as you build each quiz site — e.g.
 //   "10|chemistry": "https://mesfene-chemistry-grade10-unit1.netlify.app/...",
-// Any combo not listed here falls back to a generic line telling the
-// student you'll send the exact link after their payment is confirmed.
-const SITE_LINKS = {
-  // "10|chemistry": "https://mesfene-chemistry-grade10-unit1.netlify.app/Chemistry_Reactions_Stoichiometry_VIP_Quiz.html",
-  // "9|biology": "https://mesfene-biology-grade9-unit2.netlify.app/Biology_Grade9_Unit2_VIP_Quiz.html",
-};
-
-function sessionStore() {
-  return getStore("bot-sessions");
-}
+const SITE_LINKS = {};
 
 async function getSession(chatId) {
-  const store = sessionStore();
-  const s = await store.get(String(chatId), { type: "json" });
-  return s || { step: "idle", units: [] };
+  try {
+    const res = await fetch(`${DB_URL}/bot_sessions/${chatId}.json`);
+    const data = await res.json();
+    return data || { step: "idle", units: [] };
+  } catch (e) {
+    return { step: "idle", units: [] };
+  }
 }
 
 async function saveSession(chatId, session) {
-  const store = sessionStore();
-  await store.setJSON(String(chatId), session);
+  try {
+    await fetch(`${DB_URL}/bot_sessions/${chatId}.json`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(session),
+    });
+  } catch (e) {}
 }
 
 async function tg(method, payload) {
@@ -96,11 +86,7 @@ async function sendMessage(chatId, text, extra = {}) {
 }
 
 async function editMarkup(chatId, messageId, replyMarkup) {
-  return tg("editMessageReplyMarkup", {
-    chat_id: chatId,
-    message_id: messageId,
-    reply_markup: replyMarkup,
-  });
+  return tg("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: replyMarkup });
 }
 
 async function answerCallbackQuery(id, text, showAlert = false) {
@@ -119,7 +105,6 @@ async function notifyAdmin(text) {
   await sendMessage(ADMIN_CHAT_ID, text);
 }
 
-// ---- Step 1: track ----
 function trackKeyboard() {
   return {
     inline_keyboard: [
@@ -129,7 +114,6 @@ function trackKeyboard() {
   };
 }
 
-// ---- Step 2: grade ----
 function gradeKeyboard() {
   return {
     inline_keyboard: [
@@ -141,7 +125,6 @@ function gradeKeyboard() {
   };
 }
 
-// ---- Step 3: subject ----
 function subjectKeyboard(track) {
   const letters = ["A", "B", "C", "D"];
   return {
@@ -151,19 +134,16 @@ function subjectKeyboard(track) {
   };
 }
 
-// ---- Step 4: unit multi-select ----
-function unitLabel(n, session, selected) {
-  const tag = `${session.grade ? "Grade " + session.grade : "?"}/${
-    subjectLabel(session.track, session.subject) || "?"
-  }`;
-  const mark = selected ? "✅ " : "";
-  return `${mark}Unit ${n} [${tag}]`;
-}
-
 function subjectLabel(track, key) {
   const list = SUBJECTS[track] || [];
   const found = list.find((s) => s.key === key);
   return found ? found.label : key;
+}
+
+function unitLabel(n, session, selected) {
+  const tag = `${session.grade ? "Grade " + session.grade : "?"}/${subjectLabel(session.track, session.subject) || "?"}`;
+  const mark = selected ? "✅ " : "";
+  return `${mark}Unit ${n} [${tag}]`;
 }
 
 function unitsKeyboard(session) {
@@ -211,28 +191,22 @@ exports.handler = async function (event) {
     return { statusCode: 200, body: "ok" };
   }
 
-  // ================= Button taps =================
   if (update.callback_query) {
     const cq = update.callback_query;
     const chatId = cq.message.chat.id;
-    const messageId = cq.message.message_id;
     const data = cq.data;
     const { fullName, username } = personName(cq.from);
     let session = await getSession(chatId);
 
-    // ---- start the wizard ----
     if (data === "opt:how_to_start") {
       await answerCallbackQuery(cq.id, "እሺ 🙏");
-      await notifyAdmin(
-        `📩 <b>${fullName || "ስም የለም"}</b> (${username}) ምዝገባ ጀምሯል።\nChat ID: <code>${chatId}</code>`
-      );
+      await notifyAdmin(`📩 <b>${fullName || "ስም የለም"}</b> (${username}) ምዝገባ ጀምሯል።\nChat ID: <code>${chatId}</code>`);
       session = { step: "track", units: [] };
       await saveSession(chatId, session);
       await sendMessage(chatId, "የትምህርት አይነት ምንድነው?", { reply_markup: trackKeyboard() });
       return { statusCode: 200, body: "ok" };
     }
 
-    // ---- track chosen ----
     if (data.startsWith("track:")) {
       session.track = data.split(":")[1];
       session.step = "grade";
@@ -242,19 +216,15 @@ exports.handler = async function (event) {
       return { statusCode: 200, body: "ok" };
     }
 
-    // ---- grade chosen ----
     if (data.startsWith("grade:")) {
       session.grade = data.split(":")[1];
       session.step = "subject";
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, "እሺ");
-      await sendMessage(chatId, "የትኛውን Subject ይፈልጋሉ?", {
-        reply_markup: subjectKeyboard(session.track),
-      });
+      await sendMessage(chatId, "የትኛውን Subject ይፈልጋሉ?", { reply_markup: subjectKeyboard(session.track) });
       return { statusCode: 200, body: "ok" };
     }
 
-    // ---- subject chosen -> show unit multi-select ----
     if (data.startsWith("subj:")) {
       session.subject = data.split(":")[1];
       session.step = "units";
@@ -269,7 +239,6 @@ exports.handler = async function (event) {
       return { statusCode: 200, body: "ok" };
     }
 
-    // ---- toggle a unit ----
     if (data.startsWith("unit:")) {
       const n = parseInt(data.split(":")[1], 10);
       const already = session.units.includes(n);
@@ -277,9 +246,7 @@ exports.handler = async function (event) {
         await answerCallbackQuery(cq.id, `ከ${MAX_UNITS} በላይ unit መምረጥ አይቻልም 🙏`, true);
         return { statusCode: 200, body: "ok" };
       }
-      session.units = already
-        ? session.units.filter((u) => u !== n)
-        : [...session.units, n];
+      session.units = already ? session.units.filter((u) => u !== n) : [...session.units, n];
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, already ? "ተነስቷል" : "ተመርጧል ✅");
       if (session.unitsMessageId) {
@@ -288,7 +255,6 @@ exports.handler = async function (event) {
       return { statusCode: 200, body: "ok" };
     }
 
-    // ---- done selecting units ----
     if (data === "units_done") {
       if (session.units.length === 0) {
         await answerCallbackQuery(cq.id, "ቢያንስ አንድ unit ይምረጡ 🙏", true);
@@ -300,7 +266,7 @@ exports.handler = async function (event) {
 
       const price = PRICE_TABLE[session.units.length];
       const subjLabel = subjectLabel(session.track, session.subject);
-      const unitsList = session.units.sort((a, b) => a - b).join(", ");
+      const unitsList = [...session.units].sort((a, b) => a - b).join(", ");
 
       await notifyAdmin(
         `🧾 <b>የምዝገባ ማጠቃለያ</b>\n` +
@@ -320,7 +286,6 @@ exports.handler = async function (event) {
     return { statusCode: 200, body: "ok" };
   }
 
-  // ================= Regular messages =================
   const msg = update.message;
   if (!msg) {
     return { statusCode: 200, body: "ok" };
@@ -329,7 +294,6 @@ exports.handler = async function (event) {
   const studentChatId = msg.chat.id;
   const { fullName, username } = personName(msg.from);
 
-  // ---- a photo (e.g. payment receipt) ----
   if (msg.photo && msg.photo.length) {
     const fileId = msg.photo[msg.photo.length - 1].file_id;
     if (ADMIN_CHAT_ID) {
@@ -353,7 +317,6 @@ exports.handler = async function (event) {
 
   const text = msg.text.trim();
 
-  // ---- Admin replying to a student ----
   if (String(studentChatId) === String(ADMIN_CHAT_ID) && text.startsWith("/reply")) {
     const parts = text.split(" ");
     const targetChatId = parts[1];
@@ -372,22 +335,15 @@ exports.handler = async function (event) {
     await sendMessage(
       studentChatId,
       "ሰላም! 👋 ችግርህን/ሽን ወይም ጥያቄህን/ሽን በአጭሩ ጻፍልኝ/ፊሊኝ፣ ወይም ከታች ተጫን፣ ወደ መምህሩ በቀጥታ እልክለታለሁ። 🙏",
-      {
-        reply_markup: {
-          inline_keyboard: [[{ text: "እንዴት መጀመር እችላለው?", callback_data: "opt:how_to_start" }]],
-        },
-      }
+      { reply_markup: { inline_keyboard: [[{ text: "እንዴት መጀመር እችላለው?", callback_data: "opt:how_to_start" }]] } }
     );
     return { statusCode: 200, body: "ok" };
   }
 
-  // Any other free text: forward to the admin, then confirm to the student.
   if (ADMIN_CHAT_ID) {
     await sendMessage(
       ADMIN_CHAT_ID,
-      `📩 <b>አዲስ መልእክት</b>\n` +
-        `ከ: ${fullName || "ስም የለም"} (${username})\n` +
-        `Chat ID: <code>${studentChatId}</code>\n\n${text}`
+      `📩 <b>አዲስ መልእክት</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>\n\n${text}`
     );
   }
   await sendMessage(studentChatId, "መልእክትህ ደርሷል ✅ መምህሩ በቅርቡ ምላሽ ይሰጥሃል። አመሰግናለሁ 🙏");
