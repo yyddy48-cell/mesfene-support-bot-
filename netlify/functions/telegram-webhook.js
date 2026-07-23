@@ -56,7 +56,10 @@ async function getSession(chatId) {
   try {
     const res = await fetch(`${DB_URL}/bot_sessions/${chatId}.json`);
     const data = await res.json();
-    return data || { step: "idle", units: [] };
+    if (!data) return { step: "idle", units: [] };
+    // Firebase drops empty arrays and stores them as null — guard against that.
+    if (!Array.isArray(data.units)) data.units = [];
+    return data;
   } catch (e) {
     return { step: "idle", units: [] };
   }
