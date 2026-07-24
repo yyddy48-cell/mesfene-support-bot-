@@ -30,7 +30,7 @@ const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 const ACCOUNT_NUMBER = "1000102646437";
 const DB_URL = "https://chemistry-quiz-b0389-default-rtdb.firebaseio.com";
 
-const PRICE_TABLE = { 1: 50, 2: 70, 3: 90, 4: 110, 5: 120, 6: 130 };
+const PRICE_TABLE = { 1: 50, 2: 70, 3: 80, 4: 90, 5: 99, 6: 100 };
 const MAX_UNITS = 6;
 
 const SUBJECTS = {
