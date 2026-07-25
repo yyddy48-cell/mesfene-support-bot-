@@ -30,7 +30,7 @@ const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 const ACCOUNT_NUMBER = "1000102646437";
 const DB_URL = "https://chemistry-quiz-b0389-default-rtdb.firebaseio.com";
 
-const PRICE_TABLE = { 1: 50, 2: 70, 3: 80, 4: 90, 5: 99, 6: 100 };
+const PRICE_TABLE = { 1: 50, 2: 70, 3: 80, 4: 90, 5: 95, 6: 100 };
 const MAX_UNITS = 6;
 
 const SUBJECTS = {
@@ -168,12 +168,12 @@ async function sendFinalInstructions(chatId, session) {
   const price = PRICE_TABLE[count];
   const link = siteLinkFor(session.grade, session.subject);
   const linkLine = link
-    ? `ወደዚህ ሊንክ ይግቡ፦ ${link}`
-    : `ወደ website ልክ ሊንኩን መምህሩ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ይልክልዎታል።`;
+    ? `የመረጡትን ጥያቄዎች ሊንክ፦ ${link}`
+    : `የመረጡትን ጥያቄዎች ሊንክ መምህሩ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ይልክልዎታል።`;
 
   const text =
     `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code>\n` +
-    `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ ${linkLine} ሊንኩን ነክተው ሲገቡ training box የምትለዋን በመንካት አገልግሎቱን እንዴት መጠቀም እንዳለብዎት የሚያሳይ video ተዘጋጅቷል። video-ውን በማየት ብቻ አገልግሎቱን ያለምንም ችግር መጠቀም ይችላሉ🥰\n\n` +
+    `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ ${linkLine} ከዚያ ልክ መጀመሪያ ሊንኩን ነክተው ወደ website ሲገቡ training box የምትለዋን በመንካት አገልግሎቱን እንዴት መጠቀም እንዳለብዎት የሚያሳይ video ተዘጋጅቷል። video-ውን በማየት ብቻ አገልግሎቱን ያለምንም ችግር መጠቀም ይችላሉ🥰\n\n` +
     `ከዚያ የሚጠይቅዎትን የይለፍ ቃል (password) ይህንን በመሙላት፦ <code>mesfene123</code>\n\n` +
     `ቀጥሎ በሚመጣው page ላይ፦\n` +
     `First name:-\nLast name:-\nYour phone number:-\n\n` +
