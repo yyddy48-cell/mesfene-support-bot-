@@ -4,25 +4,19 @@
 //
 // Flow:
 //   /start -> greeting + "እንዴት መጀመር እችላለው?" button
-//   tap it -> bot asks: track (Social/Natural) -> grade (9-12) ->
-//             subject (depends on track) -> which units (multi-select,
-//             max 6) -> bot computes the price and sends payment +
-//             registration instructions automatically.
-//   A summary of what they picked is also sent to YOU (the admin) so
-//   you know what to grant access to once you get their payment
-//   screenshot.
-//   Payment screenshots/photos the student sends are forwarded to you
-//   automatically too.
-//   You reply to a student any time with, in this same chat:
+//   tap it -> bot asks: track (Social/Natural) -> subject ->
+//             grade (multi-select 9-12) -> units per grade
+//             (multi-select, max 6 per grade) -> bot computes
+//             the price and sends payment + registration
+//             instructions automatically.
+//   A summary of what they picked is also sent to YOU (the admin).
+//   Payment screenshots/photos the student sends are forwarded to you.
+//   You reply to a student any time with:
 //       /reply <chat_id> <your message>
 //
 // Required environment variables (Netlify -> Environment variables):
 //   TELEGRAM_BOT_TOKEN
 //   ADMIN_CHAT_ID
-//
-// Session (which step each student is on) is stored in the same
-// Firebase Realtime Database used by the quiz sites, under its own
-// /bot_sessions path — no extra service or package needed.
 //
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
@@ -30,8 +24,7 @@ const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
 const ACCOUNT_NUMBER = "1000102646437";
 const DB_URL = "https://chemistry-quiz-b0389-default-rtdb.firebaseio.com";
 
-const PRICE_TABLE = { 1: 50, 2: 70, 3: 80, 4: 90, 5: 95, 6: 100 };
-const MAX_UNITS = 6;
+const MAX_UNITS_PER_GRADE = 6;
 
 const SUBJECTS = {
   social: [
@@ -48,20 +41,53 @@ const SUBJECTS = {
   ],
 };
 
-// Fill these in as you build each quiz site — e.g.
-//   "10|chemistry": "https://mesfene-chemistry-grade10-unit1.netlify.app/...",
+// Fill these in as you build each quiz site
 const SITE_LINKS = {};
 
+// -----------------------------------------------
+// Price calculation based on grades count + total units
+// -----------------------------------------------
+function computePrice(gradesCount, totalUnits) {
+  if (gradesCount === 1) {
+    if (totalUnits === 1) return 50;
+    if (totalUnits === 2) return 70;
+    if (totalUnits === 3) return 80;
+    if (totalUnits === 4) return 85;
+    if (totalUnits === 5) return 90;
+    if (totalUnits >= 6) return 100;
+  }
+  if (gradesCount === 2) {
+    if (totalUnits <= 6) return 100;
+    if (totalUnits <= 11) return 120;
+    if (totalUnits >= 12) return 125;
+  }
+  if (gradesCount === 3) {
+    if (totalUnits <= 6) return 100;
+    if (totalUnits <= 12) return 125;
+    if (totalUnits >= 13) return 145;
+  }
+  if (gradesCount === 4) {
+    if (totalUnits <= 6) return 100;
+    if (totalUnits <= 12) return 125;
+    if (totalUnits <= 18) return 145;
+    if (totalUnits >= 19) return 170;
+  }
+  return 100;
+}
+
+// -----------------------------------------------
+// Firebase session helpers
+// -----------------------------------------------
 async function getSession(chatId) {
   try {
     const res = await fetch(`${DB_URL}/bot_sessions/${chatId}.json`);
     const data = await res.json();
-    if (!data) return { step: "idle", units: [] };
-    // Firebase drops empty arrays and stores them as null — guard against that.
-    if (!Array.isArray(data.units)) data.units = [];
+    if (!data) return { step: "idle", grades: [], unitsByGrade: {} };
+    if (!Array.isArray(data.grades)) data.grades = [];
+    if (!data.unitsByGrade || typeof data.unitsByGrade !== "object") data.unitsByGrade = {};
     return data;
   } catch (e) {
-    return { step: "idle", units: [] };
+    return { step: "idle", grades: [], unitsByGrade: {} };
   }
 }
 
@@ -75,6 +101,9 @@ async function saveSession(chatId, session) {
   } catch (e) {}
 }
 
+// -----------------------------------------------
+// Telegram helpers
+// -----------------------------------------------
 async function tg(method, payload) {
   const res = await fetch(`${TELEGRAM_API}/${method}`, {
     method: "POST",
@@ -89,7 +118,11 @@ async function sendMessage(chatId, text, extra = {}) {
 }
 
 async function editMarkup(chatId, messageId, replyMarkup) {
-  return tg("editMessageReplyMarkup", { chat_id: chatId, message_id: messageId, reply_markup: replyMarkup });
+  return tg("editMessageReplyMarkup", {
+    chat_id: chatId,
+    message_id: messageId,
+    reply_markup: replyMarkup,
+  });
 }
 
 async function answerCallbackQuery(id, text, showAlert = false) {
@@ -108,22 +141,14 @@ async function notifyAdmin(text) {
   await sendMessage(ADMIN_CHAT_ID, text);
 }
 
+// -----------------------------------------------
+// Keyboards
+// -----------------------------------------------
 function trackKeyboard() {
   return {
     inline_keyboard: [
       [{ text: "A. Social subject", callback_data: "track:social" }],
       [{ text: "B. Natural subject", callback_data: "track:natural" }],
-    ],
-  };
-}
-
-function gradeKeyboard() {
-  return {
-    inline_keyboard: [
-      [{ text: "A. Grade 9", callback_data: "grade:9" }],
-      [{ text: "B. Grade 10", callback_data: "grade:10" }],
-      [{ text: "C. Grade 11", callback_data: "grade:11" }],
-      [{ text: "D. Grade 12", callback_data: "grade:12" }],
     ],
   };
 }
@@ -137,43 +162,73 @@ function subjectKeyboard(track) {
   };
 }
 
+function gradeKeyboard(selectedGrades) {
+  const grades = [9, 10, 11, 12];
+  const letters = ["A", "B", "C", "D"];
+  return {
+    inline_keyboard: [
+      ...grades.map((g, i) => {
+        const selected = selectedGrades.includes(g);
+        return [
+          {
+            text: `${selected ? "✅ " : ""}${letters[i]}. Grade ${g}`,
+            callback_data: `grade:${g}`,
+          },
+        ];
+      }),
+      [{ text: "✅ ጨርሻለሁ (Done)", callback_data: "grades_done" }],
+    ],
+  };
+}
+
 function subjectLabel(track, key) {
   const list = SUBJECTS[track] || [];
   const found = list.find((s) => s.key === key);
   return found ? found.label : key;
 }
 
-function unitLabel(n, session, selected) {
-  const tag = `${session.grade ? "Grade " + session.grade : "?"}/${subjectLabel(session.track, session.subject) || "?"}`;
-  const mark = selected ? "✅ " : "";
-  return `${mark}Unit ${n} [${tag}]`;
-}
-
+// Units keyboard — one column per selected grade
 function unitsKeyboard(session) {
+  const grades = [...session.grades].sort((a, b) => a - b);
+  const unitsByGrade = session.unitsByGrade || {};
+
+  // Build rows: 10 unit rows + done button
+  // Each row has one button per grade
   const rows = [];
+
   for (let n = 1; n <= 10; n++) {
-    const selected = session.units.includes(n);
-    rows.push([{ text: unitLabel(n, session, selected), callback_data: `unit:${n}` }]);
+    const row = grades.map((g) => {
+      const selected = Array.isArray(unitsByGrade[g]) && unitsByGrade[g].includes(n);
+      return {
+        text: `${selected ? "✅ " : ""}G${g}-U${n}`,
+        callback_data: `unit:${g}:${n}`,
+      };
+    });
+    rows.push(row);
   }
+
   rows.push([{ text: "✅ ጨርሻለሁ (Done)", callback_data: "units_done" }]);
   return { inline_keyboard: rows };
 }
 
-function siteLinkFor(grade, subjectKey) {
-  return SITE_LINKS[`${grade}|${subjectKey}`] || null;
-}
-
+// -----------------------------------------------
+// Final payment message
+// -----------------------------------------------
 async function sendFinalInstructions(chatId, session) {
-  const count = session.units.length;
-  const price = PRICE_TABLE[count];
-  const link = siteLinkFor(session.grade, session.subject);
-  const linkLine = link
-    ? `የመረጡትን ጥያቄዎች ሊንክ፦ ${link}`
-    : `የመረጡትን ጥያቄዎች ሊንክ መምህሩ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ይልክልዎታል።`;
+  const grades = [...session.grades].sort((a, b) => a - b);
+  const unitsByGrade = session.unitsByGrade || {};
+
+  let totalUnits = 0;
+  grades.forEach((g) => {
+    totalUnits += Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0;
+  });
+
+  const price = computePrice(grades.length, totalUnits);
+  const subjLabel = subjectLabel(session.track, session.subject);
 
   const text =
     `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code>\n` +
-    `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ ${linkLine} ከዚያ ልክ መጀመሪያ ሊንኩን ነክተው ወደ website ሲገቡ training box የምትለዋን በመንካት አገልግሎቱን እንዴት መጠቀም እንዳለብዎት የሚያሳይ video ተዘጋጅቷል። video-ውን በማየት ብቻ አገልግሎቱን ያለምንም ችግር መጠቀም ይችላሉ🥰\n\n` +
+    `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ የመረጡትን ጥያቄዎች ሊንክ መምህሩ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ይልክልዎታል። ከዚያ ልክ መጀመሪያ ሊንኩን ነክተው ወደ website ሲገቡ training box የምትለዋን በመንካት አገልግሎቱን እንዴት መጠቀም እንዳለብዎት የሚያሳይ video ተዘጋጅቷል። video-ውን በማየት ብቻ አገልግሎቱን ያለምንም ችግር መጠቀም ይችላሉ🥰\n\n` +
     `ከዚያ የሚጠይቅዎትን የይለፍ ቃል (password) ይህንን በመሙላት፦ <code>mesfene123</code>\n\n` +
     `ቀጥሎ በሚመጣው page ላይ፦\n` +
     `First name:-\nLast name:-\nYour phone number:-\n\n` +
@@ -182,6 +237,9 @@ async function sendFinalInstructions(chatId, session) {
   await sendMessage(chatId, text);
 }
 
+// -----------------------------------------------
+// Main handler
+// -----------------------------------------------
 exports.handler = async function (event) {
   if (event.httpMethod !== "POST") {
     return { statusCode: 200, body: "ok" };
@@ -194,6 +252,7 @@ exports.handler = async function (event) {
     return { statusCode: 200, body: "ok" };
   }
 
+  // ---- CALLBACK QUERIES ----
   if (update.callback_query) {
     const cq = update.callback_query;
     const chatId = cq.message.chat.id;
@@ -201,55 +260,111 @@ exports.handler = async function (event) {
     const { fullName, username } = personName(cq.from);
     let session = await getSession(chatId);
 
+    // Start registration
     if (data === "opt:how_to_start") {
       await answerCallbackQuery(cq.id, "እሺ 🙏");
-      await notifyAdmin(`📩 <b>${fullName || "ስም የለም"}</b> (${username}) ምዝገባ ጀምሯል።\nChat ID: <code>${chatId}</code>`);
-      session = { step: "track", units: [] };
+      await notifyAdmin(
+        `📩 <b>${fullName || "ስም የለም"}</b> (${username}) ምዝገባ ጀምሯል።\nChat ID: <code>${chatId}</code>`
+      );
+      session = { step: "track", grades: [], unitsByGrade: {} };
       await saveSession(chatId, session);
       await sendMessage(chatId, "የትምህርት አይነት ምንድነው?", { reply_markup: trackKeyboard() });
       return { statusCode: 200, body: "ok" };
     }
 
+    // Track selection
     if (data.startsWith("track:")) {
       session.track = data.split(":")[1];
-      session.step = "grade";
-      await saveSession(chatId, session);
-      await answerCallbackQuery(cq.id, "እሺ");
-      await sendMessage(chatId, "የስንተኛ ክፍል ነዎት?", { reply_markup: gradeKeyboard() });
-      return { statusCode: 200, body: "ok" };
-    }
-
-    if (data.startsWith("grade:")) {
-      session.grade = data.split(":")[1];
       session.step = "subject";
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, "እሺ");
-      await sendMessage(chatId, "የትኛውን Subject ይፈልጋሉ?", { reply_markup: subjectKeyboard(session.track) });
+      await sendMessage(chatId, "የትኛውን Subject ይፈልጋሉ?", {
+        reply_markup: subjectKeyboard(session.track),
+      });
       return { statusCode: 200, body: "ok" };
     }
 
+    // Subject selection
     if (data.startsWith("subj:")) {
       session.subject = data.split(":")[1];
-      session.step = "units";
-      session.units = [];
+      session.step = "grade";
+      session.grades = [];
+      session.unitsByGrade = {};
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, "እሺ");
-      const sent = await sendMessage(chatId, "የሚፈልጉት የ unit quiz ብዛት ስንት ነው? 🥰 (ከ6 በላይ መምረጥ አይቻልም)", {
-        reply_markup: unitsKeyboard(session),
+      await sendMessage(chatId, "የስንተኛ ክፍል ነዎት? (ከ1 እስከ 4 grade መምረጥ ይችላሉ)\nከመረጡ በኋላ <b>ጨርሻለሁ</b> ይጫኑ።", {
+        reply_markup: gradeKeyboard(session.grades),
       });
+      return { statusCode: 200, body: "ok" };
+    }
+
+    // Grade toggle (multi-select)
+    if (data.startsWith("grade:")) {
+      const g = parseInt(data.split(":")[1], 10);
+      if (!Array.isArray(session.grades)) session.grades = [];
+      const already = session.grades.includes(g);
+      if (already) {
+        session.grades = session.grades.filter((x) => x !== g);
+        // remove units for that grade too
+        if (session.unitsByGrade) delete session.unitsByGrade[g];
+      } else {
+        session.grades = [...session.grades, g];
+      }
+      await saveSession(chatId, session);
+      await answerCallbackQuery(cq.id, already ? "ተነስቷል" : "ተመርጧል ✅");
+      // edit the grade message markup
+      await editMarkup(chatId, cq.message.message_id, gradeKeyboard(session.grades));
+      return { statusCode: 200, body: "ok" };
+    }
+
+    // Grades done
+    if (data === "grades_done") {
+      if (!session.grades || session.grades.length === 0) {
+        await answerCallbackQuery(cq.id, "ቢያንስ አንድ grade ይምረጡ 🙏", true);
+        return { statusCode: 200, body: "ok" };
+      }
+      await answerCallbackQuery(cq.id, "እሺ");
+      session.step = "units";
+      session.unitsByGrade = {};
+      session.grades.forEach((g) => { session.unitsByGrade[g] = []; });
+
+      const grades = [...session.grades].sort((a, b) => a - b);
+      const subjLabel = subjectLabel(session.track, session.subject);
+      const gradeStr = grades.map((g) => `Grade ${g}`).join(" and ");
+
+      const sent = await sendMessage(
+        chatId,
+        `ከ ${subjLabel} ${gradeStr} የሚፈልጉትን የ unit quiz (ጥያቄ) ብዛት ይምረጡ? 🥰\n(በአንድ grade ውስጥ ከ${MAX_UNITS_PER_GRADE} unit በላይ መምረጥ አይቻልም)\n\nG = Grade, U = Unit`,
+        { reply_markup: unitsKeyboard(session) }
+      );
       session.unitsMessageId = sent.result ? sent.result.message_id : null;
       await saveSession(chatId, session);
       return { statusCode: 200, body: "ok" };
     }
 
+    // Unit toggle
     if (data.startsWith("unit:")) {
-      const n = parseInt(data.split(":")[1], 10);
-      const already = session.units.includes(n);
-      if (!already && session.units.length >= MAX_UNITS) {
-        await answerCallbackQuery(cq.id, `ከ${MAX_UNITS} በላይ unit መምረጥ አይቻልም 🙏`, true);
+      const parts = data.split(":");
+      const g = parseInt(parts[1], 10);
+      const n = parseInt(parts[2], 10);
+
+      if (!session.unitsByGrade) session.unitsByGrade = {};
+      if (!Array.isArray(session.unitsByGrade[g])) session.unitsByGrade[g] = [];
+
+      const already = session.unitsByGrade[g].includes(n);
+      if (!already && session.unitsByGrade[g].length >= MAX_UNITS_PER_GRADE) {
+        await answerCallbackQuery(
+          cq.id,
+          `Grade ${g} ውስጥ ከ${MAX_UNITS_PER_GRADE} unit በላይ መምረጥ አይቻልም 🙏`,
+          true
+        );
         return { statusCode: 200, body: "ok" };
       }
-      session.units = already ? session.units.filter((u) => u !== n) : [...session.units, n];
+
+      session.unitsByGrade[g] = already
+        ? session.unitsByGrade[g].filter((u) => u !== n)
+        : [...session.unitsByGrade[g], n];
+
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, already ? "ተነስቷል" : "ተመርጧል ✅");
       if (session.unitsMessageId) {
@@ -258,26 +373,42 @@ exports.handler = async function (event) {
       return { statusCode: 200, body: "ok" };
     }
 
+    // Units done
     if (data === "units_done") {
-      if (session.units.length === 0) {
+      const unitsByGrade = session.unitsByGrade || {};
+      let totalUnits = 0;
+      (session.grades || []).forEach((g) => {
+        totalUnits += Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0;
+      });
+
+      if (totalUnits === 0) {
         await answerCallbackQuery(cq.id, "ቢያንስ አንድ unit ይምረጡ 🙏", true);
         return { statusCode: 200, body: "ok" };
       }
+
       await answerCallbackQuery(cq.id, "ተልኳል ✅");
       session.step = "awaiting_payment";
       await saveSession(chatId, session);
 
-      const price = PRICE_TABLE[session.units.length];
+      const grades = [...(session.grades || [])].sort((a, b) => a - b);
+      const price = computePrice(grades.length, totalUnits);
       const subjLabel = subjectLabel(session.track, session.subject);
-      const unitsList = [...session.units].sort((a, b) => a - b).join(", ");
+
+      // Build units summary for admin
+      let unitsSummary = "";
+      grades.forEach((g) => {
+        const units = (unitsByGrade[g] || []).sort((a, b) => a - b);
+        unitsSummary += `  Grade ${g}: ${units.length > 0 ? "Unit " + units.join(", ") : "—"}\n`;
+      });
 
       await notifyAdmin(
         `🧾 <b>የምዝገባ ማጠቃለያ</b>\n` +
           `ከ: ${fullName || "ስም የለም"} (${username})\n` +
           `Chat ID: <code>${chatId}</code>\n` +
-          `Grade: ${session.grade}\n` +
+          `Track: ${session.track}\n` +
           `Subject: ${subjLabel}\n` +
-          `Units: ${unitsList}\n` +
+          `Grades & Units:\n${unitsSummary}` +
+          `አጠቃላይ Units: ${totalUnits}\n` +
           `የሚከፈል ዋጋ: <b>${price} ብር</b>`
       );
 
@@ -289,14 +420,14 @@ exports.handler = async function (event) {
     return { statusCode: 200, body: "ok" };
   }
 
+  // ---- MESSAGES ----
   const msg = update.message;
-  if (!msg) {
-    return { statusCode: 200, body: "ok" };
-  }
+  if (!msg) return { statusCode: 200, body: "ok" };
 
   const studentChatId = msg.chat.id;
   const { fullName, username } = personName(msg.from);
 
+  // Photo forwarding
   if (msg.photo && msg.photo.length) {
     const fileId = msg.photo[msg.photo.length - 1].file_id;
     if (ADMIN_CHAT_ID) {
@@ -314,12 +445,11 @@ exports.handler = async function (event) {
     return { statusCode: 200, body: "ok" };
   }
 
-  if (!msg.text) {
-    return { statusCode: 200, body: "ok" };
-  }
+  if (!msg.text) return { statusCode: 200, body: "ok" };
 
   const text = msg.text.trim();
 
+  // Admin reply command
   if (String(studentChatId) === String(ADMIN_CHAT_ID) && text.startsWith("/reply")) {
     const parts = text.split(" ");
     const targetChatId = parts[1];
@@ -333,16 +463,24 @@ exports.handler = async function (event) {
     return { statusCode: 200, body: "ok" };
   }
 
+  // /start command
   if (text === "/start") {
-    await saveSession(studentChatId, { step: "idle", units: [] });
+    await saveSession(studentChatId, { step: "idle", grades: [], unitsByGrade: {} });
     await sendMessage(
       studentChatId,
       "ሰላም! 👋 ችግርህን/ሽን ወይም ጥያቄህን/ሽን በአጭሩ ጻፍልኝ/ፊሊኝ፣ ወይም ከታች ተጫን፣ ወደ መምህሩ በቀጥታ እልክለታለሁ። 🙏",
-      { reply_markup: { inline_keyboard: [[{ text: "እንዴት መጀመር እችላለው?", callback_data: "opt:how_to_start" }]] } }
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "እንዴት መጀመር እችላለው?", callback_data: "opt:how_to_start" }],
+          ],
+        },
+      }
     );
     return { statusCode: 200, body: "ok" };
   }
 
+  // Forward any other message to admin
   if (ADMIN_CHAT_ID) {
     await sendMessage(
       ADMIN_CHAT_ID,
