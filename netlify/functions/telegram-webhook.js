@@ -429,7 +429,18 @@ exports.handler = async function (event) {
 
   // Photo forwarding
   if (msg.photo && msg.photo.length) {
+    const session = await getSession(studentChatId);
     const fileId = msg.photo[msg.photo.length - 1].file_id;
+
+    // If they never completed registration, send the funny reply
+    if (session.step !== "awaiting_payment") {
+      await sendMessage(
+        studentChatId,
+        `ምን አርጉ ነው ምትለው አንበሳው?😉 ደደብ ነክ እንዴ🤭😁? ሳትጨርስ ምን አጣድፎክ ነው ምትልከው😉ሲጀመር የተማረ የት ደረሰ የተማረ ሰባተኛ ሰማይ ነው😁 ለዛ አንተ አትማር ተምረክም አጠቅምም😁እሺ አሁን በስርአት ትሰራለክ ወይስ 🤭😁`
+      );
+      return { statusCode: 200, body: "ok" };
+    }
+
     if (ADMIN_CHAT_ID) {
       await tg("sendPhoto", {
         chat_id: ADMIN_CHAT_ID,
