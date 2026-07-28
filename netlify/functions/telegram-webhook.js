@@ -432,11 +432,11 @@ exports.handler = async function (event) {
     const session = await getSession(studentChatId);
     const fileId = msg.photo[msg.photo.length - 1].file_id;
 
-    // If they never completed registration, send the funny reply
-    if (session.step !== "awaiting_payment") {
+    // If they haven't completed registration (step is not awaiting_payment), send the funny reply
+    if (session.step !== "awaiting_payment" && String(studentChatId) !== String(ADMIN_CHAT_ID)) {
       await sendMessage(
         studentChatId,
-        `ምን አርጉ ነው ምትለው አንበሳው?😉 ደደብ ነክ እንዴ🤭😁? ሳትጨርስ ምን አጣድፎክ ነው ምትልከው😉ሲጀመር የተማረ የት ደረሰ የተማረ ሰባተኛ ሰማይ ነው😁 ለዛ አንተ አትማር ተምረክም አጠቅምም😁እሺ አሁን በስርአት ትሰራለክ ወይስ 🤭😁`
+        `ምን አርጉ ነው ምትለው አንበሳው?😉 ደደብ ነክ እንዴ🤭😁? ሲጀመር የተማረ የት ደረሰ የተማረ ሰባተኛ ሰማይ ነው😁 ለዛ አንተ አትማር ተምረክም አጠቅምም😁😁`
       );
       return { statusCode: 200, body: "ok" };
     }
