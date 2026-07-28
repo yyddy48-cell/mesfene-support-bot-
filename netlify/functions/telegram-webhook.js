@@ -79,9 +79,12 @@ async function saveSession(chatId, session) {
 
 async function getSessionStep(chatId) {
   try {
-    const res = await fetch(`${DB_URL}/bot_sessions/${chatId}/step.json`);
-    const data = await res.json();
-    return typeof data === "string" ? data : "idle";
+    const res = await fetch(`${DB_URL}/bot_sessions/${chatId}.json`);
+    const text = await res.text();
+    if (!text || text === "null") return "idle";
+    const data = JSON.parse(text);
+    if (!data || typeof data !== "object") return "idle";
+    return typeof data.step === "string" ? data.step : "idle";
   } catch (e) {
     return "idle";
   }
