@@ -1,23 +1,6 @@
 // ============================================
 // Telegram Registration-Wizard Bot — Netlify Function
 // ============================================
-//
-// Flow:
-//   /start -> greeting + "እንዴት መጀመር እችላለው?" button
-//   tap it -> bot asks: track (Social/Natural) -> subject ->
-//             grade (multi-select 9-12) -> units per grade
-//             (multi-select, max 6 per grade) -> bot computes
-//             the price and sends payment + registration
-//             instructions automatically.
-//   A summary of what they picked is also sent to YOU (the admin).
-//   Payment screenshots/photos the student sends are forwarded to you.
-//   You reply to a student any time with:
-//       /reply <chat_id> <your message>
-//
-// Required environment variables (Netlify -> Environment variables):
-//   TELEGRAM_BOT_TOKEN
-//   ADMIN_CHAT_ID
-//
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
@@ -41,12 +24,8 @@ const SUBJECTS = {
   ],
 };
 
-// Fill these in as you build each quiz site
 const SITE_LINKS = {};
 
-// -----------------------------------------------
-// Price calculation based on grades count + total units
-// -----------------------------------------------
 function computePrice(gradesCount, totalUnits) {
   if (gradesCount === 1) {
     if (totalUnits === 1) return 50;
@@ -75,9 +54,6 @@ function computePrice(gradesCount, totalUnits) {
   return 100;
 }
 
-// -----------------------------------------------
-// Firebase session helpers
-// -----------------------------------------------
 async function getSession(chatId) {
   try {
     const res = await fetch(`${DB_URL}/bot_sessions/${chatId}.json`);
@@ -101,9 +77,16 @@ async function saveSession(chatId, session) {
   } catch (e) {}
 }
 
-// -----------------------------------------------
-// Telegram helpers
-// -----------------------------------------------
+async function getSessionStep(chatId) {
+  try {
+    const res = await fetch(`${DB_URL}/bot_sessions/${chatId}/step.json`);
+    const data = await res.json();
+    return typeof data === "string" ? data : "idle";
+  } catch (e) {
+    return "idle";
+  }
+}
+
 async function tg(method, payload) {
   const res = await fetch(`${TELEGRAM_API}/${method}`, {
     method: "POST",
@@ -141,9 +124,6 @@ async function notifyAdmin(text) {
   await sendMessage(ADMIN_CHAT_ID, text);
 }
 
-// -----------------------------------------------
-// Keyboards
-// -----------------------------------------------
 function trackKeyboard() {
   return {
     inline_keyboard: [
@@ -187,15 +167,10 @@ function subjectLabel(track, key) {
   return found ? found.label : key;
 }
 
-// Units keyboard — one column per selected grade
 function unitsKeyboard(session) {
   const grades = [...session.grades].sort((a, b) => a - b);
   const unitsByGrade = session.unitsByGrade || {};
-
-  // Build rows: 10 unit rows + done button
-  // Each row has one button per grade
   const rows = [];
-
   for (let n = 1; n <= 10; n++) {
     const row = grades.map((g) => {
       const selected = Array.isArray(unitsByGrade[g]) && unitsByGrade[g].includes(n);
@@ -206,25 +181,18 @@ function unitsKeyboard(session) {
     });
     rows.push(row);
   }
-
   rows.push([{ text: "✅ ጨርሻለሁ (Done)", callback_data: "units_done" }]);
   return { inline_keyboard: rows };
 }
 
-// -----------------------------------------------
-// Final payment message
-// -----------------------------------------------
 async function sendFinalInstructions(chatId, session) {
   const grades = [...session.grades].sort((a, b) => a - b);
   const unitsByGrade = session.unitsByGrade || {};
-
   let totalUnits = 0;
   grades.forEach((g) => {
     totalUnits += Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0;
   });
-
   const price = computePrice(grades.length, totalUnits);
-  const subjLabel = subjectLabel(session.track, session.subject);
 
   const text =
     `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code>\n` +
@@ -237,9 +205,6 @@ async function sendFinalInstructions(chatId, session) {
   await sendMessage(chatId, text);
 }
 
-// -----------------------------------------------
-// Main handler
-// -----------------------------------------------
 exports.handler = async function (event) {
   if (event.httpMethod !== "POST") {
     return { statusCode: 200, body: "ok" };
@@ -260,7 +225,6 @@ exports.handler = async function (event) {
     const { fullName, username } = personName(cq.from);
     let session = await getSession(chatId);
 
-    // Start registration
     if (data === "opt:how_to_start") {
       await answerCallbackQuery(cq.id, "እሺ 🙏");
       await notifyAdmin(
@@ -272,7 +236,6 @@ exports.handler = async function (event) {
       return { statusCode: 200, body: "ok" };
     }
 
-    // Track selection
     if (data.startsWith("track:")) {
       session.track = data.split(":")[1];
       session.step = "subject";
@@ -284,7 +247,6 @@ exports.handler = async function (event) {
       return { statusCode: 200, body: "ok" };
     }
 
-    // Subject selection
     if (data.startsWith("subj:")) {
       session.subject = data.split(":")[1];
       session.step = "grade";
@@ -292,32 +254,30 @@ exports.handler = async function (event) {
       session.unitsByGrade = {};
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, "እሺ");
-      await sendMessage(chatId, "የስንተኛ ክፍል ነዎት? (ከ1 እስከ 4 grade መምረጥ ይችላሉ)\nከመረጡ በኋላ <b>ጨርሻለሁ</b> ይጫኑ።", {
-        reply_markup: gradeKeyboard(session.grades),
-      });
+      await sendMessage(
+        chatId,
+        "የስንተኛ ክፍል ነዎት? (ከ1 እስከ 4 grade መምረጥ ይችላሉ)\nከመረጡ በኋላ <b>ጨርሻለሁ</b> ይጫኑ።",
+        { reply_markup: gradeKeyboard(session.grades) }
+      );
       return { statusCode: 200, body: "ok" };
     }
 
-    // Grade toggle (multi-select)
     if (data.startsWith("grade:")) {
       const g = parseInt(data.split(":")[1], 10);
       if (!Array.isArray(session.grades)) session.grades = [];
       const already = session.grades.includes(g);
       if (already) {
         session.grades = session.grades.filter((x) => x !== g);
-        // remove units for that grade too
         if (session.unitsByGrade) delete session.unitsByGrade[g];
       } else {
         session.grades = [...session.grades, g];
       }
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, already ? "ተነስቷል" : "ተመርጧል ✅");
-      // edit the grade message markup
       await editMarkup(chatId, cq.message.message_id, gradeKeyboard(session.grades));
       return { statusCode: 200, body: "ok" };
     }
 
-    // Grades done
     if (data === "grades_done") {
       if (!session.grades || session.grades.length === 0) {
         await answerCallbackQuery(cq.id, "ቢያንስ አንድ grade ይምረጡ 🙏", true);
@@ -342,7 +302,6 @@ exports.handler = async function (event) {
       return { statusCode: 200, body: "ok" };
     }
 
-    // Unit toggle
     if (data.startsWith("unit:")) {
       const parts = data.split(":");
       const g = parseInt(parts[1], 10);
@@ -373,7 +332,6 @@ exports.handler = async function (event) {
       return { statusCode: 200, body: "ok" };
     }
 
-    // Units done
     if (data === "units_done") {
       const unitsByGrade = session.unitsByGrade || {};
       let totalUnits = 0;
@@ -394,7 +352,6 @@ exports.handler = async function (event) {
       const price = computePrice(grades.length, totalUnits);
       const subjLabel = subjectLabel(session.track, session.subject);
 
-      // Build units summary for admin
       let unitsSummary = "";
       grades.forEach((g) => {
         const units = (unitsByGrade[g] || []).sort((a, b) => a - b);
@@ -426,33 +383,40 @@ exports.handler = async function (event) {
 
   const studentChatId = msg.chat.id;
   const { fullName, username } = personName(msg.from);
+  const isAdmin = String(studentChatId) === String(ADMIN_CHAT_ID);
 
   // Photo forwarding
   if (msg.photo && msg.photo.length) {
-    const session = await getSession(studentChatId);
     const fileId = msg.photo[msg.photo.length - 1].file_id;
 
-    // If they haven't completed registration (step is not awaiting_payment), send the funny reply
-    if (session.step !== "awaiting_payment" && String(studentChatId) !== String(ADMIN_CHAT_ID)) {
-      await sendMessage(
-        studentChatId,
-        `ምን አርጉ ነው ምትለው አንበሳው?😉 ደደብ ነክ እንዴ🤭😁? ሲጀመር የተማረ የት ደረሰ የተማረ ሰባተኛ ሰማይ ነው😁 ለዛ አንተ አትማር ተምረክም አጠቅምም😁😁`
-      );
-      return { statusCode: 200, body: "ok" };
+    if (!isAdmin) {
+      // Read only the step field directly from Firebase — faster and more reliable
+      const sessionStep = await getSessionStep(studentChatId);
+
+      if (sessionStep !== "awaiting_payment") {
+        // Student sent receipt without completing registration — send funny message
+        await sendMessage(
+          studentChatId,
+          `ምን አርጉ ነው ምትለው አንበሳው?😉 ደደብ ነክ እንዴ🤭😁? ሲጀመር የተማረ የት ደረሰ የተማረ ሰባተኛ ሰማይ ነው😁 ለዛ አንተ አትማር ተምረክም አጠቅምም😁😁`
+        );
+        return { statusCode: 200, body: "ok" };
+      }
+
+      // Student completed registration — forward receipt to admin
+      if (ADMIN_CHAT_ID) {
+        await tg("sendPhoto", {
+          chat_id: ADMIN_CHAT_ID,
+          photo: fileId,
+          caption:
+            `🧾 <b>ደረሰኝ/Screenshot ደርሷል</b>\n` +
+            `ከ: ${fullName || "ስም የለም"} (${username})\n` +
+            `Chat ID: <code>${studentChatId}</code>${msg.caption ? `\n\n${msg.caption}` : ""}`,
+          parse_mode: "HTML",
+        });
+      }
+      await sendMessage(studentChatId, "ደረሰኙ ደርሶናል ✅ መምህሩ አረጋግጦ በቅርቡ access ይሰጥዎታል 🙏");
     }
 
-    if (ADMIN_CHAT_ID) {
-      await tg("sendPhoto", {
-        chat_id: ADMIN_CHAT_ID,
-        photo: fileId,
-        caption:
-          `🧾 <b>ደረሰኝ/Screenshot ደርሷል</b>\n` +
-          `ከ: ${fullName || "ስም የለም"} (${username})\n` +
-          `Chat ID: <code>${studentChatId}</code>${msg.caption ? `\n\n${msg.caption}` : ""}`,
-        parse_mode: "HTML",
-      });
-    }
-    await sendMessage(studentChatId, "ደረሰኙ ደርሶናል ✅ መምህሩ አረጋግጦ በቅርቡ access ይሰጥዎታል 🙏");
     return { statusCode: 200, body: "ok" };
   }
 
@@ -461,7 +425,7 @@ exports.handler = async function (event) {
   const text = msg.text.trim();
 
   // Admin reply command
-  if (String(studentChatId) === String(ADMIN_CHAT_ID) && text.startsWith("/reply")) {
+  if (isAdmin && text.startsWith("/reply")) {
     const parts = text.split(" ");
     const targetChatId = parts[1];
     const replyText = parts.slice(2).join(" ");
