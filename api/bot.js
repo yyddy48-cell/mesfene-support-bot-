@@ -376,7 +376,7 @@ export default async function handler(req, res) {
     if (!isAdmin) {
       const sessionStep = await getSessionStep(studentChatId);
       if (sessionStep !== "awaiting_payment") {
-        await sendMessage(studentChatId, `ምን አርጉ ነው ምትለው አንበሳው?😉 ደደብ ነክ እንዴ🤭😁? ሲጀመር የተማረ የት ደረሰ የተማረ ሰባተኛ ሰማይ ነው😁 ለዛ አንተ አትማር ተምረክም አጠቅምም😁😁`);
+        await sendMessage(studentChatId, `ምን አርጉ ነው ምትለው አንበሳው?😉 ደደብ ነክ እንዴ🤭😁? ሲጀመር የተማረ የት ደረሰ የተማረ ሰባተኛ ሰማይ ነው😁 ለዛ አንተ አትማር ተምረክም አጠቅምም😁😁 instruction አታነብም እንዴ 😭 ወይንስ ማንበብ ሳትቺይ ነው highschool የገባሺው ጥቁሩ በዬ?😁 በቃ ከንደገና አንብበክ ሁሉን ነገር ጨርሰክ ተነስተክ ላክ screenshot/ ወይም ደረሰኝ😡`);
         res.status(200).send("ok");
         return;
       }
