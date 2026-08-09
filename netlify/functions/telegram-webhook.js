@@ -9,6 +9,22 @@ const DB_URL = "https://chemistry-quiz-b0389-default-rtdb.firebaseio.com";
 
 const MAX_UNITS_PER_GRADE = 6;
 
+// Mathematics-specific max units per grade
+const MATH_MAX_UNITS_PER_GRADE = {
+  9: 9,
+  10: 7,
+  11: 8,
+  12: 5,
+};
+
+// Chemistry-specific max units per grade
+const CHEM_MAX_UNITS_PER_GRADE = {
+  9: 5,
+  10: 6,
+  11: 6,
+  12: 5,
+};
+
 const SUBJECTS = {
   social: [
     { key: "mathematics", label: "Mathematics" },
@@ -26,7 +42,25 @@ const SUBJECTS = {
 
 const SITE_LINKS = {};
 
-function computePrice(gradesCount, totalUnits) {
+// Check if student selected ALL available units across all selected grades (for math or chemistry)
+function isSubjectFull(session) {
+  const grades = session.grades || [];
+  if (grades.length === 0) return false;
+  const unitsByGrade = session.unitsByGrade || {};
+  return grades.every((g) => {
+    const maxForGrade = getMaxUnits(session.subject, g);
+    const selected = Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0;
+    return selected >= maxForGrade;
+  });
+}
+
+function computePrice(gradesCount, totalUnits, subject, session) {
+  // Mathematics: 200 birr ONLY if all available units are selected
+  if (subject === "mathematics" && session && isSubjectFull(session)) return 200;
+
+  // Chemistry: 200 birr ONLY if all available units are selected
+  if (subject === "chemistry" && session && isSubjectFull(session)) return 200;
+
   if (gradesCount === 1) {
     if (totalUnits === 1) return 50;
     if (totalUnits === 2) return 70;
@@ -52,6 +86,17 @@ function computePrice(gradesCount, totalUnits) {
     if (totalUnits >= 19) return 170;
   }
   return 100;
+}
+
+// Returns the max units allowed for a given grade and subject
+function getMaxUnits(subject, grade) {
+  if (subject === "mathematics") {
+    return MATH_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  }
+  if (subject === "chemistry") {
+    return CHEM_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  }
+  return MAX_UNITS_PER_GRADE;
 }
 
 async function getSession(chatId) {
@@ -173,16 +218,23 @@ function subjectLabel(track, key) {
 function unitsKeyboard(session) {
   const grades = [...session.grades].sort((a, b) => a - b);
   const unitsByGrade = session.unitsByGrade || {};
+  const subject = session.subject || "";
+
+  // Find the maximum unit number across all selected grades
+  const maxUnitNumber = Math.max(...grades.map((g) => getMaxUnits(subject, g)));
+
   const rows = [];
-  for (let n = 1; n <= 10; n++) {
-    const row = grades.map((g) => {
-      const selected = Array.isArray(unitsByGrade[g]) && unitsByGrade[g].includes(n);
-      return {
-        text: `${selected ? "✅ " : ""}G${g}-U${n}`,
-        callback_data: `unit:${g}:${n}`,
-      };
-    });
-    rows.push(row);
+  for (let n = 1; n <= maxUnitNumber; n++) {
+    const row = grades
+      .filter((g) => n <= getMaxUnits(subject, g)) // only show button if this grade allows this unit
+      .map((g) => {
+        const selected = Array.isArray(unitsByGrade[g]) && unitsByGrade[g].includes(n);
+        return {
+          text: `${selected ? "✅ " : ""}G${g}-U${n}`,
+          callback_data: `unit:${g}:${n}`,
+        };
+      });
+    if (row.length > 0) rows.push(row);
   }
   rows.push([{ text: "✅ ጨርሻለሁ (Done)", callback_data: "units_done" }]);
   return { inline_keyboard: rows };
@@ -195,7 +247,7 @@ async function sendFinalInstructions(chatId, session) {
   grades.forEach((g) => {
     totalUnits += Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0;
   });
-  const price = computePrice(grades.length, totalUnits);
+  const price = computePrice(grades.length, totalUnits, session.subject, session);
 
   const text =
     `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code>\n` +
@@ -295,9 +347,25 @@ exports.handler = async function (event) {
       const subjLabel = subjectLabel(session.track, session.subject);
       const gradeStr = grades.map((g) => `Grade ${g}`).join(" and ");
 
+      // Build the unit limit description per grade
+      let unitLimitNote = "";
+      if (session.subject === "mathematics") {
+        const limitLines = grades
+          .map((g) => `Grade ${g}: እስከ ${MATH_MAX_UNITS_PER_GRADE[g] || MAX_UNITS_PER_GRADE} unit`)
+          .join("\n");
+        unitLimitNote = `\n\n📌 የ Mathematics unit ገደብ:\n${limitLines}`;
+      } else if (session.subject === "chemistry") {
+        const limitLines = grades
+          .map((g) => `Grade ${g}: እስከ ${CHEM_MAX_UNITS_PER_GRADE[g] || MAX_UNITS_PER_GRADE} unit`)
+          .join("\n");
+        unitLimitNote = `\n\n📌 የ Chemistry unit ገደብ:\n${limitLines}`;
+      } else {
+        unitLimitNote = `\n(በአንድ grade ውስጥ ከ${MAX_UNITS_PER_GRADE} unit በላይ መምረጥ አይቻልም)`;
+      }
+
       const sent = await sendMessage(
         chatId,
-        `ከ ${subjLabel} ${gradeStr} የሚፈልጉትን የ unit quiz (ጥያቄ) ብዛት ይምረጡ? 🥰\n(በአንድ grade ውስጥ ከ${MAX_UNITS_PER_GRADE} unit በላይ መምረጥ አይቻልም)\n\nG = Grade, U = Unit`,
+        `ከ ${subjLabel} ${gradeStr} የሚፈልጉትን የ unit quiz (ጥያቄ) ብዛት ይምረጡ? 🥰${unitLimitNote}\n\nG = Grade, U = Unit`,
         { reply_markup: unitsKeyboard(session) }
       );
       session.unitsMessageId = sent.result ? sent.result.message_id : null;
@@ -313,11 +381,13 @@ exports.handler = async function (event) {
       if (!session.unitsByGrade) session.unitsByGrade = {};
       if (!Array.isArray(session.unitsByGrade[g])) session.unitsByGrade[g] = [];
 
+      const maxUnits = getMaxUnits(session.subject, g);
       const already = session.unitsByGrade[g].includes(n);
-      if (!already && session.unitsByGrade[g].length >= MAX_UNITS_PER_GRADE) {
+
+      if (!already && session.unitsByGrade[g].length >= maxUnits) {
         await answerCallbackQuery(
           cq.id,
-          `Grade ${g} ውስጥ ከ${MAX_UNITS_PER_GRADE} unit በላይ መምረጥ አይቻልም 🙏`,
+          `Grade ${g} ውስጥ ከ${maxUnits} unit በላይ መምረጥ አይቻልም 🙏`,
           true
         );
         return { statusCode: 200, body: "ok" };
@@ -352,7 +422,7 @@ exports.handler = async function (event) {
       await saveSession(chatId, session);
 
       const grades = [...(session.grades || [])].sort((a, b) => a - b);
-      const price = computePrice(grades.length, totalUnits);
+      const price = computePrice(grades.length, totalUnits, session.subject, session);
       const subjLabel = subjectLabel(session.track, session.subject);
 
       let unitsSummary = "";
@@ -393,11 +463,9 @@ exports.handler = async function (event) {
     const fileId = msg.photo[msg.photo.length - 1].file_id;
 
     if (!isAdmin) {
-      // Read only the step field directly from Firebase — faster and more reliable
       const sessionStep = await getSessionStep(studentChatId);
 
       if (sessionStep !== "awaiting_payment") {
-        // Student sent receipt without completing registration — send funny message
         await sendMessage(
           studentChatId,
           `ምን አርጉ ነው ምትለው አንበሳው?😉 ደደብ ነክ እንዴ🤭😁? ሲጀመር የተማረ የት ደረሰ የተማረ ሰባተኛ ሰማይ ነው😁 ለዛ አንተ አትማር ተምረክም አጠቅምም😁😁`
@@ -405,7 +473,6 @@ exports.handler = async function (event) {
         return { statusCode: 200, body: "ok" };
       }
 
-      // Student completed registration — forward receipt to admin
       if (ADMIN_CHAT_ID) {
         await tg("sendPhoto", {
           chat_id: ADMIN_CHAT_ID,
