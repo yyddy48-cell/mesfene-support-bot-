@@ -188,17 +188,13 @@ function subjectLabel(track, key) {
 function unitsKeyboard(session) {
   const grades = [...session.grades].sort((a, b) => a - b);
   const unitsByGrade = session.unitsByGrade || {};
-  const subject = session.subject || "";
-  const maxUnitNumber = Math.max(...grades.map((g) => getMaxUnits(subject, g)));
   const rows = [];
-  for (let n = 1; n <= maxUnitNumber; n++) {
-    const row = grades
-      .filter((g) => n <= getMaxUnits(subject, g))
-      .map((g) => {
-        const selected = Array.isArray(unitsByGrade[g]) && unitsByGrade[g].includes(n);
-        return { text: `${selected ? "✅ " : ""}G${g}-U${n}`, callback_data: `unit:${g}:${n}` };
-      });
-    if (row.length > 0) rows.push(row);
+  for (let n = 1; n <= 10; n++) {
+    const row = grades.map((g) => {
+      const selected = Array.isArray(unitsByGrade[g]) && unitsByGrade[g].includes(n);
+      return { text: `${selected ? "✅ " : ""}G${g}-U${n}`, callback_data: `unit:${g}:${n}` };
+    });
+    rows.push(row);
   }
   rows.push([{ text: "✅ ጨርሻለሁ (Done)", callback_data: "units_done" }]);
   return { inline_keyboard: rows };
@@ -308,18 +304,7 @@ export default async function handler(req, res) {
       const subjLabel = subjectLabel(session.track, session.subject);
       const gradeStr = grades.map((g) => `Grade ${g}`).join(" and ");
 
-      let unitLimitNote = "";
-      if (session.subject === "mathematics") {
-        const limitLines = grades.map((g) => `Grade ${g}: እስከ ${MATH_MAX_UNITS_PER_GRADE[g] || MAX_UNITS_PER_GRADE} unit`).join("\n");
-        unitLimitNote = `\n\n📌 የ Mathematics unit ገደብ:\n${limitLines}`;
-      } else if (session.subject === "chemistry") {
-        const limitLines = grades.map((g) => `Grade ${g}: እስከ ${CHEM_MAX_UNITS_PER_GRADE[g] || MAX_UNITS_PER_GRADE} unit`).join("\n");
-        unitLimitNote = `\n\n📌 የ Chemistry unit ገደብ:\n${limitLines}`;
-      } else {
-        unitLimitNote = `\n(በአንድ grade ውስጥ ከ${MAX_UNITS_PER_GRADE} unit በላይ መምረጥ አይቻልም)`;
-      }
-
-      const sent = await sendMessage(chatId, `ከ ${subjLabel} ${gradeStr} የሚፈልጉትን የ unit quiz (ጥያቄ) ብዛት ይምረጡ? 🥰${unitLimitNote}\n\nG = Grade, U = Unit`, { reply_markup: unitsKeyboard(session) });
+      const sent = await sendMessage(chatId, `ከ ${subjLabel} ${gradeStr} የሚፈልጉትን የ unit quiz (ጥያቄ) ብዛት ይምረጡ? 🥰\n\nG = Grade, U = Unit`, { reply_markup: unitsKeyboard(session) });
       session.unitsMessageId = sent.result ? sent.result.message_id : null;
       await saveSession(chatId, session);
       res.status(200).send("ok");
