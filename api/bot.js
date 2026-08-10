@@ -44,10 +44,12 @@ function getMaxUnits(subject, grade) {
 }
 
 function isSubjectFull(session) {
+  const ALL_GRADES = [9, 10, 11, 12];
   const grades = session.grades || [];
-  if (grades.length === 0) return false;
+  if (grades.length !== ALL_GRADES.length) return false;
+  if (!ALL_GRADES.every((g) => grades.includes(g))) return false;
   const unitsByGrade = session.unitsByGrade || {};
-  return grades.every((g) => {
+  return ALL_GRADES.every((g) => {
     const maxForGrade = getMaxUnits(session.subject, g);
     const selected = Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0;
     return selected >= maxForGrade;
