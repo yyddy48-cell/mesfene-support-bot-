@@ -17,6 +17,8 @@ const ECON_MAX_UNITS_PER_GRADE = { 9: 8, 10: 8, 11: 7, 12: 8 };
 const PHYS_MAX_UNITS_PER_GRADE = { 9: 7, 10: 6, 11: 7, 12: 5 };
 const BIO_MAX_UNITS_PER_GRADE = { 9: 6, 10: 6, 11: 6, 12: 6 };
 
+const DAILY_INVOCATION_LIMIT = 40;
+
 const SUBJECTS = {
   social: [
     { key: "mathematics", label: "Mathematics" },
@@ -124,6 +126,34 @@ async function getSessionStep(chatId) {
     return typeof data.step === "string" ? data.step : "idle";
   } catch (e) {
     return "idle";
+  }
+}
+
+function todayKey() {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
+async function checkAndIncrementUsage(chatId) {
+  const day = todayKey();
+  const path = `${DB_URL}/bot_usage/${chatId}/${day}.json`;
+  try {
+    const res = await fetch(path);
+    const current = await res.json();
+    const count = typeof current === "number" ? current : 0;
+    if (count >= DAILY_INVOCATION_LIMIT) {
+      return { allowed: false, count };
+    }
+    const newCount = count + 1;
+    await fetch(path, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newCount),
+    });
+    return { allowed: true, count: newCount };
+  } catch (e) {
+    // If usage tracking fails for any reason, don't block the student
+    return { allowed: true, count: 0 };
   }
 }
 
@@ -255,6 +285,17 @@ export default async function handler(req, res) {
     const chatId = cq.message.chat.id;
     const data = cq.data;
     const { fullName, username } = personName(cq.from);
+    const isAdminCq = String(chatId) === String(ADMIN_CHAT_ID);
+
+    if (!isAdminCq) {
+      const usage = await checkAndIncrementUsage(chatId);
+      if (!usage.allowed) {
+        await answerCallbackQuery(cq.id, "⚠️ የዛሬው የአጠቃቀም ገደብዎ ደርሷል፣ እባክዎ ነገ ይሞክሩ 🙏", true);
+        res.status(200).send("ok");
+        return;
+      }
+    }
+
     let session = await getSession(chatId);
 
     if (data === "opt:how_to_start") {
@@ -388,6 +429,15 @@ export default async function handler(req, res) {
   const studentChatId = msg.chat.id;
   const { fullName, username } = personName(msg.from);
   const isAdmin = String(studentChatId) === String(ADMIN_CHAT_ID);
+
+  if (!isAdmin) {
+    const usage = await checkAndIncrementUsage(studentChatId);
+    if (!usage.allowed) {
+      await sendMessage(studentChatId, "⚠️ የዛሬው የአጠቃቀም ገደብዎ ደርሷል፣ እባክዎ ነገ ይሞክሩ 🙏");
+      res.status(200).send("ok");
+      return;
+    }
+  }
 
   if (msg.photo && msg.photo.length) {
     const fileId = msg.photo[msg.photo.length - 1].file_id;
