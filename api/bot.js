@@ -17,7 +17,7 @@ const ECON_MAX_UNITS_PER_GRADE = { 9: 8, 10: 8, 11: 7, 12: 8 };
 const PHYS_MAX_UNITS_PER_GRADE = { 9: 7, 10: 6, 11: 7, 12: 5 };
 const BIO_MAX_UNITS_PER_GRADE = { 9: 6, 10: 6, 11: 6, 12: 6 };
 
-const DAILY_INVOCATION_LIMIT = 120; // 4 ምዝገባ x ~20 invocation + buffer ለ toggle/ማስተካከያ
+const DAILY_INVOCATION_LIMIT = 100; // 4 ምዝገባ x ~20 invocation + buffer
 const MAX_COMPLETIONS_PER_DAY = 4; // ሙሉ ምዝገባ (registration) በቀን ለአንድ ተማሪ የሚፈቀደው ብዛት
 
 const SUBJECTS = {
