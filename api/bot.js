@@ -11,6 +11,11 @@ const MAX_UNITS_PER_GRADE = 6;
 
 const MATH_MAX_UNITS_PER_GRADE = { 9: 9, 10: 7, 11: 8, 12: 5 };
 const CHEM_MAX_UNITS_PER_GRADE = { 9: 5, 10: 6, 11: 6, 12: 5 };
+const HIST_MAX_UNITS_PER_GRADE = { 9: 9, 10: 9, 11: 9, 12: 9 };
+const GEO_MAX_UNITS_PER_GRADE = { 9: 8, 10: 8, 11: 8, 12: 8 };
+const ECON_MAX_UNITS_PER_GRADE = { 9: 8, 10: 8, 11: 7, 12: 8 };
+const PHYS_MAX_UNITS_PER_GRADE = { 9: 7, 10: 6, 11: 7, 12: 5 };
+const BIO_MAX_UNITS_PER_GRADE = { 9: 6, 10: 6, 11: 6, 12: 6 };
 
 const SUBJECTS = {
   social: [
@@ -30,6 +35,11 @@ const SUBJECTS = {
 function getMaxUnits(subject, grade) {
   if (subject === "mathematics") return MATH_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
   if (subject === "chemistry") return CHEM_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  if (subject === "history") return HIST_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  if (subject === "geography") return GEO_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  if (subject === "economics") return ECON_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  if (subject === "physics") return PHYS_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  if (subject === "biology") return BIO_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
   return MAX_UNITS_PER_GRADE;
 }
 
@@ -47,6 +57,11 @@ function isSubjectFull(session) {
 function computePrice(gradesCount, totalUnits, subject, session) {
   if (subject === "mathematics" && session && isSubjectFull(session)) return 200;
   if (subject === "chemistry" && session && isSubjectFull(session)) return 200;
+  if (subject === "history" && session && isSubjectFull(session)) return 200;
+  if (subject === "geography" && session && isSubjectFull(session)) return 200;
+  if (subject === "economics" && session && isSubjectFull(session)) return 200;
+  if (subject === "physics" && session && isSubjectFull(session)) return 200;
+  if (subject === "biology" && session && isSubjectFull(session)) return 200;
   if (gradesCount === 1) {
     if (totalUnits === 1) return 50;
     if (totalUnits === 2) return 70;
@@ -320,7 +335,8 @@ export default async function handler(req, res) {
       const maxUnits = getMaxUnits(session.subject, g);
       const already = session.unitsByGrade[g].includes(n);
       if (!already && session.unitsByGrade[g].length >= maxUnits) {
-        await answerCallbackQuery(cq.id, `Grade ${g} ውስጥ ከ${maxUnits} unit በላይ መምረጥ አይቻልም 🙏`, true);
+        const subjLabelWarn = subjectLabel(session.track, session.subject);
+        await answerCallbackQuery(cq.id, `የ grade ${g} ${subjLabelWarn} ትምህርት ${maxUnits} unit ብቻ ነው ያለው 🙏`, true);
         res.status(200).send("ok");
         return;
       }
