@@ -18,6 +18,7 @@ const PHYS_MAX_UNITS_PER_GRADE = { 9: 7, 10: 6, 11: 7, 12: 5 };
 const BIO_MAX_UNITS_PER_GRADE = { 9: 6, 10: 6, 11: 6, 12: 6 };
 
 const DAILY_INVOCATION_LIMIT = 40;
+const MAX_COMPLETIONS_PER_DAY = 4; // ሙሉ ምዝገባ (registration) በቀን ለአንድ ተማሪ የሚፈቀደው ብዛት
 
 const SUBJECTS = {
   social: [
@@ -155,6 +156,31 @@ async function checkAndIncrementUsage(chatId) {
     // If usage tracking fails for any reason, don't block the student
     return { allowed: true, count: 0 };
   }
+}
+
+async function getCompletionCount(chatId) {
+  const day = todayKey();
+  const path = `${DB_URL}/bot_completions/${chatId}/${day}.json`;
+  try {
+    const res = await fetch(path);
+    const current = await res.json();
+    return typeof current === "number" ? current : 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+async function incrementCompletionCount(chatId) {
+  const day = todayKey();
+  const path = `${DB_URL}/bot_completions/${chatId}/${day}.json`;
+  try {
+    const count = await getCompletionCount(chatId);
+    await fetch(path, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(count + 1),
+    });
+  } catch (e) {}
 }
 
 async function tg(method, payload) {
@@ -299,6 +325,14 @@ export default async function handler(req, res) {
     let session = await getSession(chatId);
 
     if (data === "opt:how_to_start") {
+      if (!isAdminCq) {
+        const completions = await getCompletionCount(chatId);
+        if (completions >= MAX_COMPLETIONS_PER_DAY) {
+          await answerCallbackQuery(cq.id, `⚠️ የዛሬው ${MAX_COMPLETIONS_PER_DAY} ምዝገባ ገደብዎ ደርሷል፣ እባክዎ ነገ ይሞክሩ 🙏`, true);
+          res.status(200).send("ok");
+          return;
+        }
+      }
       await answerCallbackQuery(cq.id, "እሺ 🙏");
       await notifyAdmin(`📩 <b>${fullName || "ስም የለም"}</b> (${username}) ምዝገባ ጀምሯል።\nChat ID: <code>${chatId}</code>`);
       session = { step: "track", grades: [], unitsByGrade: {} };
@@ -457,6 +491,7 @@ export default async function handler(req, res) {
         });
       }
       await sendMessage(studentChatId, "ደረሰኙ ደርሶናል ✅ መምህሩ አረጋግጦ በቅርቡ access ይሰጥዎታል 🙏");
+      await incrementCompletionCount(studentChatId);
     }
     res.status(200).send("ok");
     return;
