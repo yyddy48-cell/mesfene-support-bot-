@@ -130,18 +130,18 @@ async function getSessionStep(chatId) {
   }
 }
 
-function todayKey() {
-  const d = new Date();
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
-}
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 async function checkAndIncrementUsage(chatId) {
-  const day = todayKey();
-  const path = `${DB_URL}/bot_usage/${chatId}/${day}.json`;
+  const path = `${DB_URL}/bot_usage/${chatId}.json`;
   try {
     const res = await fetch(path);
     const current = await res.json();
-    const count = typeof current === "number" ? current : 0;
+    const now = Date.now();
+    const hasWindow = current && typeof current.windowStart === "number";
+    const windowExpired = !hasWindow || now - current.windowStart >= ONE_DAY_MS;
+    const count = windowExpired ? 0 : current.count || 0;
+    const windowStart = windowExpired ? now : current.windowStart;
     if (count >= DAILY_INVOCATION_LIMIT) {
       return { allowed: false, count };
     }
@@ -149,7 +149,7 @@ async function checkAndIncrementUsage(chatId) {
     await fetch(path, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(newCount),
+      body: JSON.stringify({ windowStart, count: newCount }),
     });
     return { allowed: true, count: newCount };
   } catch (e) {
@@ -159,26 +159,33 @@ async function checkAndIncrementUsage(chatId) {
 }
 
 async function getCompletionCount(chatId) {
-  const day = todayKey();
-  const path = `${DB_URL}/bot_completions/${chatId}/${day}.json`;
+  const path = `${DB_URL}/bot_completions/${chatId}.json`;
   try {
     const res = await fetch(path);
     const current = await res.json();
-    return typeof current === "number" ? current : 0;
+    const now = Date.now();
+    const hasWindow = current && typeof current.windowStart === "number";
+    const windowExpired = !hasWindow || now - current.windowStart >= ONE_DAY_MS;
+    return windowExpired ? 0 : current.count || 0;
   } catch (e) {
     return 0;
   }
 }
 
 async function incrementCompletionCount(chatId) {
-  const day = todayKey();
-  const path = `${DB_URL}/bot_completions/${chatId}/${day}.json`;
+  const path = `${DB_URL}/bot_completions/${chatId}.json`;
   try {
-    const count = await getCompletionCount(chatId);
+    const res = await fetch(path);
+    const current = await res.json();
+    const now = Date.now();
+    const hasWindow = current && typeof current.windowStart === "number";
+    const windowExpired = !hasWindow || now - current.windowStart >= ONE_DAY_MS;
+    const count = windowExpired ? 0 : current.count || 0;
+    const windowStart = windowExpired ? now : current.windowStart;
     await fetch(path, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(count + 1),
+      body: JSON.stringify({ windowStart, count: count + 1 }),
     });
   } catch (e) {}
 }
