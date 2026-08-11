@@ -261,9 +261,15 @@ function subjectLabel(track, key) {
 function unitsKeyboard(session) {
   const grades = [...session.grades].sort((a, b) => a - b);
   const unitsByGrade = session.unitsByGrade || {};
+  const maxByGrade = {};
+  grades.forEach((g) => { maxByGrade[g] = getMaxUnits(session.subject, g); });
+  const overallMax = Math.max(0, ...grades.map((g) => maxByGrade[g]));
   const rows = [];
-  for (let n = 1; n <= 10; n++) {
+  for (let n = 1; n <= overallMax; n++) {
     const row = grades.map((g) => {
+      if (n > maxByGrade[g]) {
+        return { text: " ", callback_data: "noop" };
+      }
       const selected = Array.isArray(unitsByGrade[g]) && unitsByGrade[g].includes(n);
       return { text: `${selected ? "✅ " : ""}G${g}-U${n}`, callback_data: `unit:${g}:${n}` };
     });
@@ -403,6 +409,12 @@ export default async function handler(req, res) {
       return;
     }
 
+    if (data === "noop") {
+      await answerCallbackQuery(cq.id);
+      res.status(200).send("ok");
+      return;
+    }
+
     if (data.startsWith("unit:")) {
       const parts = data.split(":");
       const g = parseInt(parts[1], 10);
@@ -410,9 +422,14 @@ export default async function handler(req, res) {
       if (!session.unitsByGrade) session.unitsByGrade = {};
       if (!Array.isArray(session.unitsByGrade[g])) session.unitsByGrade[g] = [];
       const maxUnits = getMaxUnits(session.subject, g);
+      const subjLabelWarn = subjectLabel(session.track, session.subject);
+      if (n > maxUnits) {
+        await answerCallbackQuery(cq.id, `የ grade ${g} ${subjLabelWarn} ትምህርት ${maxUnits} unit ብቻ ነው ያለው 🙏`, true);
+        res.status(200).send("ok");
+        return;
+      }
       const already = session.unitsByGrade[g].includes(n);
       if (!already && session.unitsByGrade[g].length >= maxUnits) {
-        const subjLabelWarn = subjectLabel(session.track, session.subject);
         await answerCallbackQuery(cq.id, `የ grade ${g} ${subjLabelWarn} ትምህርት ${maxUnits} unit ብቻ ነው ያለው 🙏`, true);
         res.status(200).send("ok");
         return;
