@@ -294,12 +294,10 @@ async function sendFinalInstructions(chatId, session) {
   const price = computePrice(grades.length, totalUnits, session.subject, session);
 
   const text =
-    `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code>\n` +
-    `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ የመረጡትን ጥያቄዎች ሊንክ መምህሩ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ይልክልዎታል። ከዚያ ልክ መጀመሪያ ሊንኩን ነክተው ወደ website ሲገቡ training box የምትለዋን በመንካት አገልግሎቱን እንዴት መጠቀም እንዳለብዎት የሚያሳይ video ተዘጋጅቷል። video-ውን በማየት ብቻ አገልግሎቱን ያለምንም ችግር መጠቀም ይችላሉ🥰\n\n` +
-    `ከዚያ የሚጠይቅዎትን የይለፍ ቃል (password) ይህንን በመሙላት፦ <code>mesfene123</code>\n\n` +
-    `ቀጥሎ በሚመጣው page ላይ፦\n` +
-    `First name:-\nLast name:-\nYour phone number:-\n\n` +
-    `በማስገባት ከተመዘገቡ በኋላ የከፈሉበትን ደረሰኝ ወይም screenshot ወደዚህ ወደዚሁ chat በመላክ ሙሉ አገልግሎቱን ማስጀመር ይችላሉ🙏🙏🙏🥰🥰`;
+    `ሰላም 🥰?\n` +
+    `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code> (mesele samuel endale)\n\n` +
+    `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ የከፈሉበትን ደረሰኝ ወይም screenshot ወደዚህ ወደዚሁ chat በመላክ የመረጡትን subject መምህሩ ተመልክቶ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ለመረጡት subject access ይሰጥዎታል። 🥰\n\n` +
+    `🙏🙏🙏🙏🙏🙏🙏BN academy 🙏🙏🙏🙏🙏🙏🙏`;
 
   await sendMessage(chatId, text);
 }
