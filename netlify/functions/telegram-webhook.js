@@ -1,5 +1,5 @@
 // ============================================
-// Telegram Registration-Wizard Bot — Netlify Function
+// Telegram Registration-Wizard Bot — Vercel Function
 // ============================================
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
@@ -9,21 +9,16 @@ const DB_URL = "https://chemistry-quiz-b0389-default-rtdb.firebaseio.com";
 
 const MAX_UNITS_PER_GRADE = 6;
 
-// Mathematics-specific max units per grade
-const MATH_MAX_UNITS_PER_GRADE = {
-  9: 9,
-  10: 7,
-  11: 8,
-  12: 5,
-};
+const MATH_MAX_UNITS_PER_GRADE = { 9: 9, 10: 7, 11: 8, 12: 5 };
+const CHEM_MAX_UNITS_PER_GRADE = { 9: 5, 10: 6, 11: 6, 12: 5 };
+const HIST_MAX_UNITS_PER_GRADE = { 9: 9, 10: 9, 11: 9, 12: 9 };
+const GEO_MAX_UNITS_PER_GRADE = { 9: 8, 10: 8, 11: 8, 12: 8 };
+const ECON_MAX_UNITS_PER_GRADE = { 9: 8, 10: 8, 11: 7, 12: 8 };
+const PHYS_MAX_UNITS_PER_GRADE = { 9: 7, 10: 6, 11: 7, 12: 5 };
+const BIO_MAX_UNITS_PER_GRADE = { 9: 6, 10: 6, 11: 6, 12: 6 };
 
-// Chemistry-specific max units per grade
-const CHEM_MAX_UNITS_PER_GRADE = {
-  9: 5,
-  10: 6,
-  11: 6,
-  12: 5,
-};
+const DAILY_INVOCATION_LIMIT = 100; // 4 ምዝገባ x ~20 invocation + buffer
+const MAX_COMPLETIONS_PER_DAY = 4; // ሙሉ ምዝገባ (registration) በቀን ለአንድ ተማሪ የሚፈቀደው ብዛት
 
 const SUBJECTS = {
   social: [
@@ -40,14 +35,24 @@ const SUBJECTS = {
   ],
 };
 
-const SITE_LINKS = {};
+function getMaxUnits(subject, grade) {
+  if (subject === "mathematics") return MATH_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  if (subject === "chemistry") return CHEM_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  if (subject === "history") return HIST_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  if (subject === "geography") return GEO_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  if (subject === "economics") return ECON_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  if (subject === "physics") return PHYS_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  if (subject === "biology") return BIO_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
+  return MAX_UNITS_PER_GRADE;
+}
 
-// Check if student selected ALL available units across all selected grades (for math or chemistry)
 function isSubjectFull(session) {
+  const ALL_GRADES = [9, 10, 11, 12];
   const grades = session.grades || [];
-  if (grades.length === 0) return false;
+  if (grades.length !== ALL_GRADES.length) return false;
+  if (!ALL_GRADES.every((g) => grades.includes(g))) return false;
   const unitsByGrade = session.unitsByGrade || {};
-  return grades.every((g) => {
+  return ALL_GRADES.every((g) => {
     const maxForGrade = getMaxUnits(session.subject, g);
     const selected = Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0;
     return selected >= maxForGrade;
@@ -55,12 +60,13 @@ function isSubjectFull(session) {
 }
 
 function computePrice(gradesCount, totalUnits, subject, session) {
-  // Mathematics: 200 birr ONLY if all available units are selected
   if (subject === "mathematics" && session && isSubjectFull(session)) return 200;
-
-  // Chemistry: 200 birr ONLY if all available units are selected
   if (subject === "chemistry" && session && isSubjectFull(session)) return 200;
-
+  if (subject === "history" && session && isSubjectFull(session)) return 200;
+  if (subject === "geography" && session && isSubjectFull(session)) return 200;
+  if (subject === "economics" && session && isSubjectFull(session)) return 200;
+  if (subject === "physics" && session && isSubjectFull(session)) return 200;
+  if (subject === "biology" && session && isSubjectFull(session)) return 200;
   if (gradesCount === 1) {
     if (totalUnits === 1) return 50;
     if (totalUnits === 2) return 70;
@@ -86,17 +92,6 @@ function computePrice(gradesCount, totalUnits, subject, session) {
     if (totalUnits >= 19) return 170;
   }
   return 100;
-}
-
-// Returns the max units allowed for a given grade and subject
-function getMaxUnits(subject, grade) {
-  if (subject === "mathematics") {
-    return MATH_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
-  }
-  if (subject === "chemistry") {
-    return CHEM_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
-  }
-  return MAX_UNITS_PER_GRADE;
 }
 
 async function getSession(chatId) {
@@ -133,6 +128,66 @@ async function getSessionStep(chatId) {
   } catch (e) {
     return "idle";
   }
+}
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+async function checkAndIncrementUsage(chatId) {
+  const path = `${DB_URL}/bot_usage/${chatId}.json`;
+  try {
+    const res = await fetch(path);
+    const current = await res.json();
+    const now = Date.now();
+    const hasWindow = current && typeof current.windowStart === "number";
+    const windowExpired = !hasWindow || now - current.windowStart >= ONE_DAY_MS;
+    const count = windowExpired ? 0 : current.count || 0;
+    const windowStart = windowExpired ? now : current.windowStart;
+    if (count >= DAILY_INVOCATION_LIMIT) {
+      return { allowed: false, count };
+    }
+    const newCount = count + 1;
+    await fetch(path, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ windowStart, count: newCount }),
+    });
+    return { allowed: true, count: newCount };
+  } catch (e) {
+    // If usage tracking fails for any reason, don't block the student
+    return { allowed: true, count: 0 };
+  }
+}
+
+async function getCompletionCount(chatId) {
+  const path = `${DB_URL}/bot_completions/${chatId}.json`;
+  try {
+    const res = await fetch(path);
+    const current = await res.json();
+    const now = Date.now();
+    const hasWindow = current && typeof current.windowStart === "number";
+    const windowExpired = !hasWindow || now - current.windowStart >= ONE_DAY_MS;
+    return windowExpired ? 0 : current.count || 0;
+  } catch (e) {
+    return 0;
+  }
+}
+
+async function incrementCompletionCount(chatId) {
+  const path = `${DB_URL}/bot_completions/${chatId}.json`;
+  try {
+    const res = await fetch(path);
+    const current = await res.json();
+    const now = Date.now();
+    const hasWindow = current && typeof current.windowStart === "number";
+    const windowExpired = !hasWindow || now - current.windowStart >= ONE_DAY_MS;
+    const count = windowExpired ? 0 : current.count || 0;
+    const windowStart = windowExpired ? now : current.windowStart;
+    await fetch(path, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ windowStart, count: count + 1 }),
+    });
+  } catch (e) {}
 }
 
 async function tg(method, payload) {
@@ -197,12 +252,7 @@ function gradeKeyboard(selectedGrades) {
     inline_keyboard: [
       ...grades.map((g, i) => {
         const selected = selectedGrades.includes(g);
-        return [
-          {
-            text: `${selected ? "✅ " : ""}${letters[i]}. Grade ${g}`,
-            callback_data: `grade:${g}`,
-          },
-        ];
+        return [{ text: `${selected ? "✅ " : ""}${letters[i]}. Grade ${g}`, callback_data: `grade:${g}` }];
       }),
       [{ text: "✅ ጨርሻለሁ (Done)", callback_data: "grades_done" }],
     ],
@@ -218,23 +268,19 @@ function subjectLabel(track, key) {
 function unitsKeyboard(session) {
   const grades = [...session.grades].sort((a, b) => a - b);
   const unitsByGrade = session.unitsByGrade || {};
-  const subject = session.subject || "";
-
-  // Find the maximum unit number across all selected grades
-  const maxUnitNumber = Math.max(...grades.map((g) => getMaxUnits(subject, g)));
-
+  const maxByGrade = {};
+  grades.forEach((g) => { maxByGrade[g] = getMaxUnits(session.subject, g); });
+  const overallMax = Math.max(0, ...grades.map((g) => maxByGrade[g]));
   const rows = [];
-  for (let n = 1; n <= maxUnitNumber; n++) {
-    const row = grades
-      .filter((g) => n <= getMaxUnits(subject, g)) // only show button if this grade allows this unit
-      .map((g) => {
-        const selected = Array.isArray(unitsByGrade[g]) && unitsByGrade[g].includes(n);
-        return {
-          text: `${selected ? "✅ " : ""}G${g}-U${n}`,
-          callback_data: `unit:${g}:${n}`,
-        };
-      });
-    if (row.length > 0) rows.push(row);
+  for (let n = 1; n <= overallMax; n++) {
+    const row = grades.map((g) => {
+      if (n > maxByGrade[g]) {
+        return { text: " ", callback_data: "noop" };
+      }
+      const selected = Array.isArray(unitsByGrade[g]) && unitsByGrade[g].includes(n);
+      return { text: `${selected ? "✅ " : ""}G${g}-U${n}`, callback_data: `unit:${g}:${n}` };
+    });
+    rows.push(row);
   }
   rows.push([{ text: "✅ ጨርሻለሁ (Done)", callback_data: "units_done" }]);
   return { inline_keyboard: rows };
@@ -244,32 +290,30 @@ async function sendFinalInstructions(chatId, session) {
   const grades = [...session.grades].sort((a, b) => a - b);
   const unitsByGrade = session.unitsByGrade || {};
   let totalUnits = 0;
-  grades.forEach((g) => {
-    totalUnits += Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0;
-  });
+  grades.forEach((g) => { totalUnits += Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0; });
   const price = computePrice(grades.length, totalUnits, session.subject, session);
 
   const text =
-    `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code>\n` +
-    `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ የመረጡትን ጥያቄዎች ሊንክ መምህሩ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ይልክልዎታል። ከዚያ ልክ መጀመሪያ ሊንኩን ነክተው ወደ website ሲገቡ training box የምትለዋን በመንካት አገልግሎቱን እንዴት መጠቀም እንዳለብዎት የሚያሳይ video ተዘጋጅቷል። video-ውን በማየት ብቻ አገልግሎቱን ያለምንም ችግር መጠቀም ይችላሉ🥰\n\n` +
-    `ከዚያ የሚጠይቅዎትን የይለፍ ቃል (password) ይህንን በመሙላት፦ <code>mesfene123</code>\n\n` +
-    `ቀጥሎ በሚመጣው page ላይ፦\n` +
-    `First name:-\nLast name:-\nYour phone number:-\n\n` +
-    `በማስገባት ከተመዘገቡ በኋላ የከፈሉበትን ደረሰኝ ወይም screenshot ወደዚህ ወደዚሁ chat በመላክ ሙሉ አገልግሎቱን ማስጀመር ይችላሉ🙏🙏🙏🥰🥰`;
+    `ሰላም 🥰?\n` +
+    `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code> (mesele samuel endale)\n\n` +
+    `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ የከፈሉበትን ደረሰኝ ወይም screenshot ወደዚህ ወደዚሁ chat በመላክ የመረጡትን subject መምህሩ ተመልክቶ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ለመረጡት subject unit access ይሰጥዎታል። 🥰\n\n` +
+    `🙏🙏🙏🙏🙏🙏🙏BN academy 🙏🙏🙏🙏🙏🙏🙏`;
 
   await sendMessage(chatId, text);
 }
 
-exports.handler = async function (event) {
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 200, body: "ok" };
+export default async function handler(req, res) {
+  if (req.method !== "POST") {
+    res.status(200).send("ok");
+    return;
   }
 
   let update;
   try {
-    update = JSON.parse(event.body);
+    update = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
   } catch (e) {
-    return { statusCode: 200, body: "ok" };
+    res.status(200).send("ok");
+    return;
   }
 
   // ---- CALLBACK QUERIES ----
@@ -278,17 +322,35 @@ exports.handler = async function (event) {
     const chatId = cq.message.chat.id;
     const data = cq.data;
     const { fullName, username } = personName(cq.from);
+    const isAdminCq = String(chatId) === String(ADMIN_CHAT_ID);
+
+    if (!isAdminCq) {
+      const usage = await checkAndIncrementUsage(chatId);
+      if (!usage.allowed) {
+        await answerCallbackQuery(cq.id, "⚠️ የዛሬው የአጠቃቀም ገደብዎ ደርሷል፣ እባክዎ ነገ ይሞክሩ 🙏", true);
+        res.status(200).send("ok");
+        return;
+      }
+    }
+
     let session = await getSession(chatId);
 
     if (data === "opt:how_to_start") {
+      if (!isAdminCq) {
+        const completions = await getCompletionCount(chatId);
+        if (completions >= MAX_COMPLETIONS_PER_DAY) {
+          await answerCallbackQuery(cq.id, `⚠️ የዛሬው ${MAX_COMPLETIONS_PER_DAY} ምዝገባ ገደብዎ ደርሷል፣ እባክዎ ነገ ይሞክሩ 🙏`, true);
+          res.status(200).send("ok");
+          return;
+        }
+      }
       await answerCallbackQuery(cq.id, "እሺ 🙏");
-      await notifyAdmin(
-        `📩 <b>${fullName || "ስም የለም"}</b> (${username}) ምዝገባ ጀምሯል።\nChat ID: <code>${chatId}</code>`
-      );
+      await notifyAdmin(`📩 <b>${fullName || "ስም የለም"}</b> (${username}) ምዝገባ ጀምሯል።\nChat ID: <code>${chatId}</code>`);
       session = { step: "track", grades: [], unitsByGrade: {} };
       await saveSession(chatId, session);
       await sendMessage(chatId, "የትምህርት አይነት ምንድነው?", { reply_markup: trackKeyboard() });
-      return { statusCode: 200, body: "ok" };
+      res.status(200).send("ok");
+      return;
     }
 
     if (data.startsWith("track:")) {
@@ -296,10 +358,9 @@ exports.handler = async function (event) {
       session.step = "subject";
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, "እሺ");
-      await sendMessage(chatId, "የትኛውን Subject ይፈልጋሉ?", {
-        reply_markup: subjectKeyboard(session.track),
-      });
-      return { statusCode: 200, body: "ok" };
+      await sendMessage(chatId, "የትኛውን Subject ይፈልጋሉ?", { reply_markup: subjectKeyboard(session.track) });
+      res.status(200).send("ok");
+      return;
     }
 
     if (data.startsWith("subj:")) {
@@ -309,12 +370,9 @@ exports.handler = async function (event) {
       session.unitsByGrade = {};
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, "እሺ");
-      await sendMessage(
-        chatId,
-        "የስንተኛ ክፍል ነዎት? (ከ1 እስከ 4 grade መምረጥ ይችላሉ)\nከመረጡ በኋላ <b>ጨርሻለሁ</b> ይጫኑ።",
-        { reply_markup: gradeKeyboard(session.grades) }
-      );
-      return { statusCode: 200, body: "ok" };
+      await sendMessage(chatId, "የስንተኛ ክፍል ነዎት? (ከ1 እስከ 4 grade መምረጥ ይችላሉ)\nከመረጡ በኋላ <b>ጨርሻለሁ</b> ይጫኑ።", { reply_markup: gradeKeyboard(session.grades) });
+      res.status(200).send("ok");
+      return;
     }
 
     if (data.startsWith("grade:")) {
@@ -330,13 +388,15 @@ exports.handler = async function (event) {
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, already ? "ተነስቷል" : "ተመርጧል ✅");
       await editMarkup(chatId, cq.message.message_id, gradeKeyboard(session.grades));
-      return { statusCode: 200, body: "ok" };
+      res.status(200).send("ok");
+      return;
     }
 
     if (data === "grades_done") {
       if (!session.grades || session.grades.length === 0) {
         await answerCallbackQuery(cq.id, "ቢያንስ አንድ grade ይምረጡ 🙏", true);
-        return { statusCode: 200, body: "ok" };
+        res.status(200).send("ok");
+        return;
       }
       await answerCallbackQuery(cq.id, "እሺ");
       session.step = "units";
@@ -347,154 +407,122 @@ exports.handler = async function (event) {
       const subjLabel = subjectLabel(session.track, session.subject);
       const gradeStr = grades.map((g) => `Grade ${g}`).join(" and ");
 
-      // Build the unit limit description per grade
-      let unitLimitNote = "";
-      if (session.subject === "mathematics") {
-        const limitLines = grades
-          .map((g) => `Grade ${g}: እስከ ${MATH_MAX_UNITS_PER_GRADE[g] || MAX_UNITS_PER_GRADE} unit`)
-          .join("\n");
-        unitLimitNote = `\n\n📌 የ Mathematics unit ገደብ:\n${limitLines}`;
-      } else if (session.subject === "chemistry") {
-        const limitLines = grades
-          .map((g) => `Grade ${g}: እስከ ${CHEM_MAX_UNITS_PER_GRADE[g] || MAX_UNITS_PER_GRADE} unit`)
-          .join("\n");
-        unitLimitNote = `\n\n📌 የ Chemistry unit ገደብ:\n${limitLines}`;
-      } else {
-        unitLimitNote = `\n(በአንድ grade ውስጥ ከ${MAX_UNITS_PER_GRADE} unit በላይ መምረጥ አይቻልም)`;
-      }
-
-      const sent = await sendMessage(
-        chatId,
-        `ከ ${subjLabel} ${gradeStr} የሚፈልጉትን የ unit quiz (ጥያቄ) ብዛት ይምረጡ? 🥰${unitLimitNote}\n\nG = Grade, U = Unit`,
-        { reply_markup: unitsKeyboard(session) }
-      );
+      const sent = await sendMessage(chatId, `ከ ${subjLabel} ${gradeStr} የሚፈልጉትን የ unit quiz (ጥያቄ) ብዛት ይምረጡ? 🥰\n\nG = Grade, U = Unit`, { reply_markup: unitsKeyboard(session) });
       session.unitsMessageId = sent.result ? sent.result.message_id : null;
       await saveSession(chatId, session);
-      return { statusCode: 200, body: "ok" };
+      res.status(200).send("ok");
+      return;
+    }
+
+    if (data === "noop") {
+      await answerCallbackQuery(cq.id);
+      res.status(200).send("ok");
+      return;
     }
 
     if (data.startsWith("unit:")) {
       const parts = data.split(":");
       const g = parseInt(parts[1], 10);
       const n = parseInt(parts[2], 10);
-
       if (!session.unitsByGrade) session.unitsByGrade = {};
       if (!Array.isArray(session.unitsByGrade[g])) session.unitsByGrade[g] = [];
-
       const maxUnits = getMaxUnits(session.subject, g);
-      const already = session.unitsByGrade[g].includes(n);
-
-      if (!already && session.unitsByGrade[g].length >= maxUnits) {
-        await answerCallbackQuery(
-          cq.id,
-          `Grade ${g} ውስጥ ከ${maxUnits} unit በላይ መምረጥ አይቻልም 🙏`,
-          true
-        );
-        return { statusCode: 200, body: "ok" };
+      const subjLabelWarn = subjectLabel(session.track, session.subject);
+      if (n > maxUnits) {
+        await answerCallbackQuery(cq.id, `የ grade ${g} ${subjLabelWarn} ትምህርት ${maxUnits} unit ብቻ ነው ያለው 🙏`, true);
+        res.status(200).send("ok");
+        return;
       }
-
-      session.unitsByGrade[g] = already
-        ? session.unitsByGrade[g].filter((u) => u !== n)
-        : [...session.unitsByGrade[g], n];
-
+      const already = session.unitsByGrade[g].includes(n);
+      if (!already && session.unitsByGrade[g].length >= maxUnits) {
+        await answerCallbackQuery(cq.id, `የ grade ${g} ${subjLabelWarn} ትምህርት ${maxUnits} unit ብቻ ነው ያለው 🙏`, true);
+        res.status(200).send("ok");
+        return;
+      }
+      session.unitsByGrade[g] = already ? session.unitsByGrade[g].filter((u) => u !== n) : [...session.unitsByGrade[g], n];
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, already ? "ተነስቷል" : "ተመርጧል ✅");
-      if (session.unitsMessageId) {
-        await editMarkup(chatId, session.unitsMessageId, unitsKeyboard(session));
-      }
-      return { statusCode: 200, body: "ok" };
+      if (session.unitsMessageId) await editMarkup(chatId, session.unitsMessageId, unitsKeyboard(session));
+      res.status(200).send("ok");
+      return;
     }
 
     if (data === "units_done") {
       const unitsByGrade = session.unitsByGrade || {};
       let totalUnits = 0;
-      (session.grades || []).forEach((g) => {
-        totalUnits += Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0;
-      });
-
+      (session.grades || []).forEach((g) => { totalUnits += Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0; });
       if (totalUnits === 0) {
         await answerCallbackQuery(cq.id, "ቢያንስ አንድ unit ይምረጡ 🙏", true);
-        return { statusCode: 200, body: "ok" };
+        res.status(200).send("ok");
+        return;
       }
-
       await answerCallbackQuery(cq.id, "ተልኳል ✅");
       session.step = "awaiting_payment";
       await saveSession(chatId, session);
-
       const grades = [...(session.grades || [])].sort((a, b) => a - b);
       const price = computePrice(grades.length, totalUnits, session.subject, session);
       const subjLabel = subjectLabel(session.track, session.subject);
-
       let unitsSummary = "";
       grades.forEach((g) => {
         const units = (unitsByGrade[g] || []).sort((a, b) => a - b);
         unitsSummary += `  Grade ${g}: ${units.length > 0 ? "Unit " + units.join(", ") : "—"}\n`;
       });
-
-      await notifyAdmin(
-        `🧾 <b>የምዝገባ ማጠቃለያ</b>\n` +
-          `ከ: ${fullName || "ስም የለም"} (${username})\n` +
-          `Chat ID: <code>${chatId}</code>\n` +
-          `Track: ${session.track}\n` +
-          `Subject: ${subjLabel}\n` +
-          `Grades & Units:\n${unitsSummary}` +
-          `አጠቃላይ Units: ${totalUnits}\n` +
-          `የሚከፈል ዋጋ: <b>${price} ብር</b>`
-      );
-
+      await notifyAdmin(`🧾 <b>የምዝገባ ማጠቃለያ</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${chatId}</code>\nTrack: ${session.track}\nSubject: ${subjLabel}\nGrades & Units:\n${unitsSummary}አጠቃላይ Units: ${totalUnits}\nየሚከፈል ዋጋ: <b>${price} ብር</b>`);
       await sendFinalInstructions(chatId, session);
-      return { statusCode: 200, body: "ok" };
+      res.status(200).send("ok");
+      return;
     }
 
     await answerCallbackQuery(cq.id, "");
-    return { statusCode: 200, body: "ok" };
+    res.status(200).send("ok");
+    return;
   }
 
   // ---- MESSAGES ----
   const msg = update.message;
-  if (!msg) return { statusCode: 200, body: "ok" };
+  if (!msg) { res.status(200).send("ok"); return; }
 
   const studentChatId = msg.chat.id;
   const { fullName, username } = personName(msg.from);
   const isAdmin = String(studentChatId) === String(ADMIN_CHAT_ID);
 
-  // Photo forwarding
+  if (!isAdmin) {
+    const usage = await checkAndIncrementUsage(studentChatId);
+    if (!usage.allowed) {
+      await sendMessage(studentChatId, "⚠️ የዛሬው የአጠቃቀም ገደብዎ ደርሷል፣ እባክዎ ነገ ይሞክሩ 🙏");
+      res.status(200).send("ok");
+      return;
+    }
+  }
+
   if (msg.photo && msg.photo.length) {
     const fileId = msg.photo[msg.photo.length - 1].file_id;
-
     if (!isAdmin) {
       const sessionStep = await getSessionStep(studentChatId);
-
       if (sessionStep !== "awaiting_payment") {
-        await sendMessage(
-          studentChatId,
-          `ምን አርጉ ነው ምትለው አንበሳው?😉 ደደብ ነክ እንዴ🤭😁? ሲጀመር የተማረ የት ደረሰ የተማረ ሰባተኛ ሰማይ ነው😁 ለዛ አንተ አትማር ተምረክም አጠቅምም😁😁`
-        );
-        return { statusCode: 200, body: "ok" };
+        await sendMessage(studentChatId, `ምን አርጉ ነው ምትለው አንበሳው?😉 ደደብ ነክ እንዴ🤭😁? ሲጀመር የተማረ የት ደረሰ የተማረ ሰባተኛ ሰማይ ነው😁 ለዛ አንተ አትማር ተምረክም አጠቅምም😁😁 instruction አታነብም እንዴ 😭 ወይንስ ማንበብ ሳትቺይ ነው highschool የገባሺው ጥቁሩ በዬ?😁 በቃ ከንደገና አንብበክ ሁሉን ነገር ጨርሰክ ተነስተክ ላክ screenshot/ ወይም ደረሰኝ😡`);
+        res.status(200).send("ok");
+        return;
       }
-
       if (ADMIN_CHAT_ID) {
         await tg("sendPhoto", {
           chat_id: ADMIN_CHAT_ID,
           photo: fileId,
-          caption:
-            `🧾 <b>ደረሰኝ/Screenshot ደርሷል</b>\n` +
-            `ከ: ${fullName || "ስም የለም"} (${username})\n` +
-            `Chat ID: <code>${studentChatId}</code>${msg.caption ? `\n\n${msg.caption}` : ""}`,
+          caption: `🧾 <b>ደረሰኝ/Screenshot ደርሷል</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>${msg.caption ? `\n\n${msg.caption}` : ""}`,
           parse_mode: "HTML",
         });
       }
       await sendMessage(studentChatId, "ደረሰኙ ደርሶናል ✅ መምህሩ አረጋግጦ በቅርቡ access ይሰጥዎታል 🙏");
+      await incrementCompletionCount(studentChatId);
     }
-
-    return { statusCode: 200, body: "ok" };
+    res.status(200).send("ok");
+    return;
   }
 
-  if (!msg.text) return { statusCode: 200, body: "ok" };
+  if (!msg.text) { res.status(200).send("ok"); return; }
 
   const text = msg.text.trim();
 
-  // Admin reply command
   if (isAdmin && text.startsWith("/reply")) {
     const parts = text.split(" ");
     const targetChatId = parts[1];
@@ -505,34 +533,22 @@ exports.handler = async function (event) {
     } else {
       await sendMessage(ADMIN_CHAT_ID, "አጠቃቀም፦ /reply <chat_id> <መልእክት>");
     }
-    return { statusCode: 200, body: "ok" };
+    res.status(200).send("ok");
+    return;
   }
 
-  // /start command
   if (text === "/start") {
     await saveSession(studentChatId, { step: "idle", grades: [], unitsByGrade: {} });
-    await sendMessage(
-      studentChatId,
-      "ሰላም! 👋 ችግርህን/ሽን ወይም ጥያቄህን/ሽን በአጭሩ ጻፍልኝ/ፊሊኝ፣ ወይም ከታች ተጫን፣ ወደ መምህሩ በቀጥታ እልክለታለሁ። 🙏",
-      {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "እንዴት መጀመር እችላለው?", callback_data: "opt:how_to_start" }],
-          ],
-        },
-      }
-    );
-    return { statusCode: 200, body: "ok" };
+    await sendMessage(studentChatId, "ሰላም! 👋 ችግርህን/ሽን ወይም ጥያቄህን/ሽን በአጭሩ ጻፍልኝ/ፊሊኝ፣ ወይም ከታች ተጫን፣ ወደ መምህሩ በቀጥታ እልክለታለሁ። 🙏", {
+      reply_markup: { inline_keyboard: [[{ text: "እንዴት መጀመር እችላለው?", callback_data: "opt:how_to_start" }]] },
+    });
+    res.status(200).send("ok");
+    return;
   }
 
-  // Forward any other message to admin
   if (ADMIN_CHAT_ID) {
-    await sendMessage(
-      ADMIN_CHAT_ID,
-      `📩 <b>አዲስ መልእክት</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>\n\n${text}`
-    );
+    await sendMessage(ADMIN_CHAT_ID, `📩 <b>አዲስ መልእክት</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>\n\n${text}`);
   }
   await sendMessage(studentChatId, "መልእክትህ ደርሷል ✅ መምህሩ በቅርቡ ምላሽ ይሰጥሃል። አመሰግናለሁ 🙏");
-
-  return { statusCode: 200, body: "ok" };
-};
+  res.status(200).send("ok");
+}
