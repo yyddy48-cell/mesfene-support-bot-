@@ -296,7 +296,7 @@ async function sendFinalInstructions(chatId, session) {
   const text =
     `ሰላም 🥰?\n` +
     `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code> (mesele samuel endale)\n\n` +
-    `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ የከፈሉበትን ደረሰኝ ወይም screenshot ወደዚህ ወደዚሁ chat በመላክ የመረጡትን subject መምህሩ ተመልክቶ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ለመረጡት subject unit access ይሰጥዎታል። 🥰\n\n` +
+    `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ የከፈሉበትን ደረሰኝ ወይም screenshot ወደዚህ ወደዚሁ chat በመላክ የመረጡትን subject መምህሩ ተመልክቶ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ለመረጡት subject እና unit access ይሰጥዎታል። 🥰\n\n` +
     `🙏🙏🙏🙏🙏🙏🙏BN academy 🙏🙏🙏🙏🙏🙏🙏`;
 
   await sendMessage(chatId, text);
