@@ -345,7 +345,7 @@ async function sendFinalInstructions(chatId, session) {
   await sendLogoPhoto(chatId, text);
 }
 
-export default async function handler(req, res) {
+module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(200).send("ok");
     return;
@@ -606,4 +606,4 @@ export default async function handler(req, res) {
     if (session.step === "awaiting_first_name") {
       if (!isValidName(text)) {
         await sendMessage(studentChatId, "⚠️ First name ከ4 እስከ 8 ፊደላት ብቻ (ያለ ቁጥር/ስፔስ) መሆን አለበት፣ እባክዎ በድጋሚ ያስገቡ 🙏");
-        res
+        r
