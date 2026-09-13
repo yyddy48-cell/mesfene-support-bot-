@@ -35,6 +35,29 @@ const SUBJECTS = {
   ],
 };
 
+const COUNTRIES = [
+  { code: "251", label: "🇪🇹 Ethiopia +251" },
+  { code: "1", label: "🇺🇸 USA/Canada +1" },
+  { code: "44", label: "🇬🇧 UK +44" },
+  { code: "254", label: "🇰🇪 Kenya +254" },
+  { code: "966", label: "🇸🇦 Saudi Arabia +966" },
+];
+
+function isValidName(value) {
+  const v = (value || "").trim();
+  if (v.length < 4 || v.length > 8) return false;
+  return /^[A-Za-z\u1200-\u137F]+$/.test(v);
+}
+
+function countryKeyboard() {
+  return {
+    inline_keyboard: [
+      ...COUNTRIES.map((c) => [{ text: c.label, callback_data: `country:${c.code}` }]),
+      [{ text: "🌍 ሌላ አገር (Other)", callback_data: "country:other" }],
+    ],
+  };
+}
+
 function getMaxUnits(subject, grade) {
   if (subject === "mathematics") return MATH_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
   if (subject === "chemistry") return CHEM_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
@@ -294,6 +317,7 @@ async function sendFinalInstructions(chatId, session) {
   const price = computePrice(grades.length, totalUnits, session.subject, session);
 
   const text =
+    `✅ ገብቷል፦ <b>${session.firstName || "-"} ${session.lastName || "-"}</b> | ${session.phoneNumber || "-"}\n\n` +
     `ሰላም 🥰?\n` +
     `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code> (mesele samuel endale)\n\n` +
     `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ የከፈሉበትን ደረሰኝ ወይም screenshot ወደዚህ ወደዚሁ chat በመላክ የመረጡትን subject መምህሩ ተመልክቶ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ለመረጡት subject እና unit access ይሰጥዎታል። 🥰\n\n` +
@@ -457,18 +481,29 @@ export default async function handler(req, res) {
         return;
       }
       await answerCallbackQuery(cq.id, "ተልኳል ✅");
-      session.step = "awaiting_payment";
+      session.step = "awaiting_first_name";
       await saveSession(chatId, session);
-      const grades = [...(session.grades || [])].sort((a, b) => a - b);
-      const price = computePrice(grades.length, totalUnits, session.subject, session);
-      const subjLabel = subjectLabel(session.track, session.subject);
-      let unitsSummary = "";
-      grades.forEach((g) => {
-        const units = (unitsByGrade[g] || []).sort((a, b) => a - b);
-        unitsSummary += `  Grade ${g}: ${units.length > 0 ? "Unit " + units.join(", ") : "—"}\n`;
-      });
-      await notifyAdmin(`🧾 <b>የምዝገባ ማጠቃለያ</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${chatId}</code>\nTrack: ${session.track}\nSubject: ${subjLabel}\nGrades & Units:\n${unitsSummary}አጠቃላይ Units: ${totalUnits}\nየሚከፈል ዋጋ: <b>${price} ብር</b>`);
-      await sendFinalInstructions(chatId, session);
+      await sendMessage(
+        chatId,
+        `እባክዎትን application ሲጠቀሙ ወደ premium ሲገቡ የተጠቀሙበትን First name, Last name እና Phone number ትክክለኛውን spelling ሳይሳሳቱ ያስገቡ 🙏\n` +
+        `ከረሱት: nav button → አካውት → my info → copy ተጭነው እዚህ ላይ ለጥፉ።\n\n` +
+        `👉 <b>First name</b> ያስገቡ (ከ4 እስከ 8 ፊደላት)፦`
+      );
+      res.status(200).send("ok");
+      return;
+    }
+
+    if (data.startsWith("country:")) {
+      const code = data.split(":")[1];
+      session.countryCode = code === "other" ? "" : code;
+      session.step = "awaiting_phone";
+      await saveSession(chatId, session);
+      await answerCallbackQuery(cq.id, "እሺ");
+      if (code === "other") {
+        await sendMessage(chatId, "📱 Phone number ያስገቡ ከ country code ጋር (ለምሳሌ +254712345678)፦");
+      } else {
+        await sendMessage(chatId, `📱 Phone number ያስገቡ (ያለ 0 ወይም + code, ለምሳሌ 987654165)፦`);
+      }
       res.status(200).send("ok");
       return;
     }
@@ -498,8 +533,8 @@ export default async function handler(req, res) {
   if (msg.photo && msg.photo.length) {
     const fileId = msg.photo[msg.photo.length - 1].file_id;
     if (!isAdmin) {
-      const sessionStep = await getSessionStep(studentChatId);
-      if (sessionStep !== "awaiting_payment") {
+      const session = await getSession(studentChatId);
+      if (session.step !== "awaiting_payment") {
         await sendMessage(studentChatId, `ምን አርጉ ነው ምትለው አንበሳው?😉 ደደብ ነክ እንዴ🤭😁? ሲጀመር የተማረ የት ደረሰ የተማረ ሰባተኛ ሰማይ ነው😁 ለዛ አንተ አትማር ተምረክም አጠቅምም😁😁 instruction አታነብም እንዴ 😭 ወይንስ ማንበብ ሳትቺይ ነው highschool የገባሺው ጥቁሩ በዬ?😁 በቃ ከንደገና አንብበክ ሁሉን ነገር ጨርሰክ ተነስተክ ላክ screenshot/ ወይም ደረሰኝ😡`);
         res.status(200).send("ok");
         return;
@@ -508,7 +543,7 @@ export default async function handler(req, res) {
         await tg("sendPhoto", {
           chat_id: ADMIN_CHAT_ID,
           photo: fileId,
-          caption: `🧾 <b>ደረሰኝ/Screenshot ደርሷል</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>${msg.caption ? `\n\n${msg.caption}` : ""}`,
+          caption: `🧾 <b>ደረሰኝ/Screenshot ደርሷል</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>\nApp First name: ${session.firstName || "-"}\nApp Last name: ${session.lastName || "-"}\nApp Phone: ${session.phoneNumber || "-"}${msg.caption ? `\n\n${msg.caption}` : ""}`,
           parse_mode: "HTML",
         });
       }
@@ -544,6 +579,82 @@ export default async function handler(req, res) {
     });
     res.status(200).send("ok");
     return;
+  }
+
+  if (!isAdmin) {
+    const session = await getSession(studentChatId);
+
+    if (session.step === "awaiting_first_name") {
+      if (!isValidName(text)) {
+        await sendMessage(studentChatId, "⚠️ First name ከ4 እስከ 8 ፊደላት ብቻ (ያለ ቁጥር/ስፔስ) መሆን አለበት፣ እባክዎ በድጋሚ ያስገቡ 🙏");
+        res.status(200).send("ok");
+        return;
+      }
+      session.firstName = text;
+      session.step = "awaiting_last_name";
+      await saveSession(studentChatId, session);
+      await sendMessage(studentChatId, "👉 <b>Last name</b> ያስገቡ (ከ4 እስከ 8 ፊደላት)፦");
+      res.status(200).send("ok");
+      return;
+    }
+
+    if (session.step === "awaiting_last_name") {
+      if (!isValidName(text)) {
+        await sendMessage(studentChatId, "⚠️ Last name ከ4 እስከ 8 ፊደላት ብቻ (ያለ ቁጥር/ስፔስ) መሆን አለበት፣ እባክዎ በድጋሚ ያስገቡ 🙏");
+        res.status(200).send("ok");
+        return;
+      }
+      session.lastName = text;
+      session.step = "awaiting_country";
+      await saveSession(studentChatId, session);
+      await sendMessage(studentChatId, "📱 Phone number ላይ የፈለጉትን አገር ይምረጡ 👇", { reply_markup: countryKeyboard() });
+      res.status(200).send("ok");
+      return;
+    }
+
+    if (session.step === "awaiting_phone") {
+      const raw = text.replace(/[^\d+]/g, "");
+      let fullPhone;
+      if (session.countryCode) {
+        const local = raw.replace(/^0+/, "");
+        if (local.length < 7 || local.length > 10) {
+          await sendMessage(studentChatId, "⚠️ ትክክለኛ phone number ያስገቡ (ያለ country code እና 0) 🙏");
+          res.status(200).send("ok");
+          return;
+        }
+        fullPhone = `+${session.countryCode}${local}`;
+      } else {
+        if (!raw.startsWith("+") || raw.length < 8) {
+          await sendMessage(studentChatId, "⚠️ Phone number ከ country code ጋር ያስገቡ (ለምሳሌ +254712345678) 🙏");
+          res.status(200).send("ok");
+          return;
+        }
+        fullPhone = raw;
+      }
+      session.phoneNumber = fullPhone;
+      session.step = "awaiting_payment";
+      await saveSession(studentChatId, session);
+
+      const grades = [...(session.grades || [])].sort((a, b) => a - b);
+      const unitsByGrade = session.unitsByGrade || {};
+      let totalUnits = 0;
+      grades.forEach((g) => { totalUnits += Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0; });
+      const price = computePrice(grades.length, totalUnits, session.subject, session);
+      const subjLabel = subjectLabel(session.track, session.subject);
+      let unitsSummary = "";
+      grades.forEach((g) => {
+        const units = (unitsByGrade[g] || []).sort((a, b) => a - b);
+        unitsSummary += `  Grade ${g}: ${units.length > 0 ? "Unit " + units.join(", ") : "—"}\n`;
+      });
+      await notifyAdmin(
+        `🧾 <b>የምዝገባ ማጠቃለያ</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>\n` +
+        `App First name: ${session.firstName}\nApp Last name: ${session.lastName}\nApp Phone: ${session.phoneNumber}\n` +
+        `Track: ${session.track}\nSubject: ${subjLabel}\nGrades & Units:\n${unitsSummary}አጠቃላይ Units: ${totalUnits}\nየሚከፈል ዋጋ: <b>${price} ብር</b>`
+      );
+      await sendFinalInstructions(studentChatId, session);
+      res.status(200).send("ok");
+      return;
+    }
   }
 
   if (ADMIN_CHAT_ID) {
