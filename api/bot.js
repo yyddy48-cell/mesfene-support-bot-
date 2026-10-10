@@ -13,7 +13,7 @@ const MAX_UNITS_PER_GRADE = 6;
 const MATH_MAX_UNITS_PER_GRADE = { 9: 9, 10: 7, 11: 8, 12: 5 };
 const CHEM_MAX_UNITS_PER_GRADE = { 9: 5, 10: 6, 11: 6, 12: 5 };
 const HIST_MAX_UNITS_PER_GRADE = { 9: 9, 10: 9, 11: 9, 12: 9 };
-const GEO_MAX_UNITS_PER_GRADE = { 9: 8, 10: 8, 11: 8, 12: 8 };
+const GEO_MAX_UNITS_PER_GRADE = { 9: 8, 10: 8, 11: 7, 12: 8 };
 const ECON_MAX_UNITS_PER_GRADE = { 9: 8, 10: 8, 11: 7, 12: 8 };
 const PHYS_MAX_UNITS_PER_GRADE = { 9: 7, 10: 6, 11: 7, 12: 5 };
 const BIO_MAX_UNITS_PER_GRADE = { 9: 6, 10: 6, 11: 6, 12: 6 };
@@ -306,6 +306,8 @@ function unitsKeyboard(session) {
     });
     rows.push(row);
   }
+  const allSelected = grades.every((g) => Array.isArray(unitsByGrade[g]) && unitsByGrade[g].length >= maxByGrade[g]);
+  rows.push([{ text: allSelected ? "☑️ ሁሉንም አንሳ (Clear all)" : "☑️ ሁሉንም unit ምረጥ (Select all)", callback_data: "units_all" }]);
   rows.push([{ text: "✅ ጨርሻለሁ (Done)", callback_data: "units_done" }]);
   return { inline_keyboard: rows };
 }
@@ -418,6 +420,73 @@ async function grantAccess(chatId, pay) {
   return { ok: true, count: newKeys.length };
 }
 
+
+// ---------- OCR (OCR.space) ----------
+const OCR_KEY = process.env.OCR_SPACE_API_KEY;
+const AUTO_APPROVE = process.env.AUTO_APPROVE === "true";
+const RECEIVER_NAME_TOKENS = ["MESELE", "SAMUEL", "ENDALE"];
+
+async function downloadTelegramFile(fileId) {
+  const info = await tg("getFile", { file_id: fileId });
+  if (!info.ok) throw new Error("getFile failed");
+  const r = await fetch(`https://api.telegram.org/file/bot${process.env.TELEGRAM_BOT_TOKEN}/${info.result.file_path}`);
+  const buf = Buffer.from(await r.arrayBuffer());
+  return buf;
+}
+
+async function ocrImage(fileId) {
+  if (!OCR_KEY) return null;
+  const buf = await downloadTelegramFile(fileId);
+  const form = new URLSearchParams();
+  form.set("apikey", OCR_KEY);
+  form.set("base64Image", `data:image/jpeg;base64,${buf.toString("base64")}`);
+  form.set("language", "eng");
+  form.set("OCREngine", "2");
+  form.set("scale", "true");
+  const r = await fetch("https://api.ocr.space/parse/image", { method: "POST", body: form });
+  const j = await r.json();
+  if (!j || j.IsErroredOnProcessing || !j.ParsedResults || !j.ParsedResults[0]) return null;
+  return String(j.ParsedResults[0].ParsedText || "");
+}
+
+// ከ OCR ጽሑፍ መጠን፣ ተቀባይ እና transaction ቁጥር ይፈትሻል
+function analyzeReceipt(text, price) {
+  const up = String(text || "").toUpperCase();
+  const digitsOnly = up.replace(/\D/g, "");
+
+  // መጠን፦ ነጥብ ያለው ቁጥር (125.00) ከዋጋው እኩል ወይም ከዚያ በላይ
+  const amounts = [];
+  const re = /(\d{1,3}(?:,\d{3})+|\d+)\.\d{2}\b/g;
+  let m;
+  while ((m = re.exec(up))) amounts.push(Math.abs(parseFloat(m[0].replace(/,/g, ""))));
+  const amountOk = amounts.some((n) => n >= price && n <= price * 20);
+
+  // ተቀባይ፦ account ቁጥር (መጨረሻ 7 አሃዝ) ወይም ቢያንስ 2 የስም ክፍሎች
+  const accTail = ACCOUNT_NUMBER.slice(-7);
+  const nameHits = RECEIVER_NAME_TOKENS.filter((t) => up.includes(t)).length;
+  const receiverOk = digitsOnly.includes(accTail) || nameHits >= 2;
+
+  // Transaction ቁጥር፦ 2 ፊደል + ፊደል/ቁጥር (ቢያንስ አንድ አሃዝ ያለው)
+  let txn = "";
+  const tre = /\b[A-Z]{2}[A-Z0-9]{8,12}\b/g;
+  while ((m = tre.exec(up))) {
+    if (/\d/.test(m[0])) { txn = m[0]; break; }
+  }
+  return { amountOk, receiverOk, txn, amounts: amounts.slice(0, 4) };
+}
+
+async function approvePayment(studentId, pay) {
+  let result;
+  try { result = await grantAccess(studentId, pay); } catch (e) { result = { ok: false, reason: String(e) }; }
+  if (!result.ok) return result;
+  pay.status = "approved";
+  pay.decidedAt = Date.now();
+  await dbPut(`bot_payments/${studentId}`, pay);
+  if (pay.txn) await dbPut(`bot_txns/${pay.txn}`, { chatId: String(studentId), at: Date.now() });
+  await sendMessage(studentId, BN_HEADER + "✅ ክፍያዎ ተረጋግጧል! ለመረጡት subject እና unit access ተከፍቷል። ወደ application ገብተው ይጠቀሙ 🥰\n\n🙏 BN Academy 🙏");
+  return result;
+}
+
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(200).send("ok");
@@ -455,18 +524,13 @@ module.exports = async function handler(req, res) {
         return;
       }
       if (action === "ok") {
-        let result;
-        try { result = await grantAccess(studentId, pay); } catch (e) { result = { ok: false, reason: String(e) }; }
+        const result = await approvePayment(studentId, pay);
         if (!result.ok) {
           await answerCallbackQuery(cq.id, "⚠️ አልተከፈተም", true);
           await sendMessage(chatId, `⚠️ <b>Access መክፈት አልተቻለም</b>\nChat ID: <code>${studentId}</code>\nምክንያት: ${result.reason}\n(በተኖቹ አሁንም ይሠራሉ፤ ችግሩን አስተካክለው በድጋሚ ይሞክሩ ወይም በ control page በእጅ ይክፈቱ)`);
           res.status(200).send("ok");
           return;
         }
-        pay.status = "approved";
-        pay.decidedAt = Date.now();
-        await dbPut(`bot_payments/${studentId}`, pay);
-        await sendMessage(studentId, BN_HEADER + "✅ ክፍያዎ ተረጋግጧል! ለመረጡት subject እና unit access ተከፍቷል። ወደ application ገብተው ይጠቀሙ 🥰\n\n🙏 BN Academy 🙏");
         await answerCallbackQuery(cq.id, "✅ Approved");
         await editMarkup(chatId, cq.message.message_id, { inline_keyboard: [[{ text: "✅ Approved", callback_data: "noop" }]] });
       } else {
@@ -605,6 +669,24 @@ module.exports = async function handler(req, res) {
       return;
     }
 
+    if (data === "units_all") {
+      if (!session.unitsByGrade) session.unitsByGrade = {};
+      const gradesSel = session.grades || [];
+      const allSelectedNow = gradesSel.length > 0 && gradesSel.every((g) => {
+        const max = getMaxUnits(session.subject, g);
+        return Array.isArray(session.unitsByGrade[g]) && session.unitsByGrade[g].length >= max;
+      });
+      gradesSel.forEach((g) => {
+        const max = getMaxUnits(session.subject, g);
+        session.unitsByGrade[g] = allSelectedNow ? [] : Array.from({ length: max }, (_, i) => i + 1);
+      });
+      await saveSession(chatId, session);
+      await answerCallbackQuery(cq.id, allSelectedNow ? "ተነስቷል" : "ሁሉም unit ተመርጧል ✅");
+      if (session.unitsMessageId) await editMarkup(chatId, session.unitsMessageId, unitsKeyboard(session));
+      res.status(200).send("ok");
+      return;
+    }
+
     if (data === "units_done") {
       const unitsByGrade = session.unitsByGrade || {};
       let totalUnits = 0;
@@ -671,7 +753,11 @@ module.exports = async function handler(req, res) {
   }
 
   if (msg.photo && msg.photo.length) {
-    const fileId = msg.photo[msg.photo.length - 1].file_id;
+    const largest = msg.photo[msg.photo.length - 1];
+    // OCR.space ነጻ እቅድ 1MB ገደብ ስላለው ከ 1MB በታች ያለውን ትልቁን ይመርጣል
+    const forOcr = [...msg.photo].reverse().find((p) => !p.file_size || p.file_size < 1000000) || msg.photo[0];
+    const fileId = largest.file_id;
+    const fileUniqueId = largest.file_unique_id;
     if (!isAdmin) {
       const session = await getSession(studentChatId);
       if (session.step !== "awaiting_payment") {
@@ -679,38 +765,94 @@ module.exports = async function handler(req, res) {
         res.status(200).send("ok");
         return;
       }
+
+      // ተመሳሳይ ፎቶ ቀድሞ pending ከሆነ እንደገና አያስኬድም (Telegram retry መከላከያ)
+      const prev = await dbGet(`bot_payments/${studentChatId}`);
+      if (prev && prev.status === "pending" && prev.fileUniqueId === fileUniqueId) {
+        res.status(200).send("ok");
+        return;
+      }
+
+      const t = sessionTotals(session);
+      const sp = splitPhone(session);
+      const pay = {
+        status: "pending",
+        fileId,
+        fileUniqueId,
+        firstName: session.firstName || "",
+        lastName: session.lastName || "",
+        phone: session.phoneNumber || "",
+        track: session.track || "",
+        subject: session.subject || "",
+        grades: t.grades,
+        unitsByGrade: t.unitsByGrade,
+        price: t.price,
+        dial: sp.dial,
+        digits: sp.digits,
+        createdAt: Date.now(),
+      };
+      await dbPut(`bot_payments/${studentChatId}`, pay);
+      await sendMessage(studentChatId, "ደረሰኙ ደርሶናል ✅ በመረጋገጥ ላይ ነው፣ በቅርቡ access ይሰጥዎታል 🙏");
+      await incrementCompletionCount(studentChatId);
+
+      // ---- OCR ----
+      let verdict = "";
+      let canAuto = false;
+      try {
+        const ocrText = await ocrImage(forOcr.file_id);
+        if (ocrText === null) {
+          verdict = OCR_KEY ? "\n\n🤖 OCR፦ ፎቶውን ማንበብ አልተቻለም ⚠️ በእጅ ይመልከቱ" : "";
+        } else {
+          const a = analyzeReceipt(ocrText, t.price);
+          let txnLine = "❓ ቁጥር አልተነበበም";
+          let txnFresh = false;
+          if (a.txn) {
+            const used = await dbGet(`bot_txns/${a.txn}`);
+            const fileUsed = await dbGet(`bot_files/${fileUniqueId}`);
+            if (used || (fileUsed && String(fileUsed.chatId) !== String(studentChatId))) {
+              txnLine = `🚫 <code>${a.txn}</code> ቀድሞ ጥቅም ላይ ውሏል!`;
+            } else {
+              txnLine = `✅ <code>${a.txn}</code> አዲስ`;
+              txnFresh = true;
+            }
+            pay.txn = a.txn;
+          }
+          await dbPut(`bot_files/${fileUniqueId}`, { chatId: String(studentChatId), at: Date.now() });
+          pay.ocr = { amountOk: a.amountOk, receiverOk: a.receiverOk, txn: a.txn || "" };
+          await dbPut(`bot_payments/${studentChatId}`, pay);
+          canAuto = a.amountOk && a.receiverOk && txnFresh;
+          verdict =
+            `\n\n🤖 <b>OCR ውጤት</b>\n` +
+            `${a.amountOk ? "✅" : "❌"} መጠን (${t.price} ብር ወይም ከዚያ በላይ)${a.amounts.length ? " — ተነበበ: " + a.amounts.join(", ") : ""}\n` +
+            `${a.receiverOk ? "✅" : "❌"} ተቀባይ (account/ስም)\n` +
+            `${txnLine}\n` +
+            (canAuto ? "🟢 ሁሉም ተዛምዷል" : "🟡 በእጅ ይመልከቱ");
+        }
+      } catch (e) {
+        verdict = "\n\n🤖 OCR ስህተት ⚠️ በእጅ ይመልከቱ";
+      }
+
+      // ---- ራስ-ሰር approve (AUTO_APPROVE=true ሲሆን ብቻ) ----
+      let autoDone = false;
+      if (AUTO_APPROVE && canAuto) {
+        const r = await approvePayment(studentChatId, pay);
+        autoDone = r.ok;
+        if (!r.ok) verdict += `\n⚠️ ራስ-ሰር መክፈት አልተሳካም: ${r.reason}`;
+      }
+      if (autoDone) verdict += "\n\n🤖✅ <b>ራስ-ሰር Approved</b>";
+
       if (ADMIN_CHAT_ID) {
         await tg("sendPhoto", {
           chat_id: ADMIN_CHAT_ID,
           photo: fileId,
-          caption: `🧾 <b>ደረሰኝ/Screenshot ደርሷል</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>\nApp First name: ${session.firstName || "-"}\nApp Last name: ${session.lastName || "-"}\nApp Phone: ${session.phoneNumber || "-"}${msg.caption ? `\n\n${msg.caption}` : ""}`,
+          caption: `🧾 <b>ደረሰኝ/Screenshot ደርሷል</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>\nApp First name: ${session.firstName || "-"}\nApp Last name: ${session.lastName || "-"}\nApp Phone: ${session.phoneNumber || "-"}\nSubject: ${session.subject || "-"} | ${t.price} ብር${msg.caption ? `\n\n${msg.caption}` : ""}${verdict}`.slice(0, 1020),
           parse_mode: "HTML",
-          reply_markup: { inline_keyboard: [[
+          ...(autoDone ? {} : { reply_markup: { inline_keyboard: [[
             { text: "✅ Approve", callback_data: `pay:ok:${studentChatId}` },
             { text: "❌ Reject", callback_data: `pay:no:${studentChatId}` },
-          ]] },
+          ]] } }),
         });
       }
-      {
-        const t = sessionTotals(session);
-        await dbPut(`bot_payments/${studentChatId}`, {
-          status: "pending",
-          fileId,
-          firstName: session.firstName || "",
-          lastName: session.lastName || "",
-          phone: session.phoneNumber || "",
-          track: session.track || "",
-          subject: session.subject || "",
-          grades: t.grades,
-          unitsByGrade: t.unitsByGrade,
-          price: t.price,
-          dial: splitPhone(session).dial,
-          digits: splitPhone(session).digits,
-          createdAt: Date.now(),
-        });
-      }
-      await sendMessage(studentChatId, "ደረሰኙ ደርሶናል ✅ መምህሩ አረጋግጦ በቅርቡ access ይሰጥዎታል 🙏");
-      await incrementCompletionCount(studentChatId);
     }
     res.status(200).send("ok");
     return;
