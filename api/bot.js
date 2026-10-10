@@ -327,6 +327,97 @@ async function sendFinalInstructions(chatId, session) {
   await sendMessage(chatId, BN_HEADER + text);
 }
 
+
+// ---------- PAYMENT APPROVAL ----------
+function sessionTotals(session) {
+  const grades = [...(session.grades || [])].sort((a, b) => a - b);
+  const unitsByGrade = session.unitsByGrade || {};
+  let totalUnits = 0;
+  grades.forEach((g) => { totalUnits += Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0; });
+  const price = computePrice(grades.length, totalUnits, session.subject, session);
+  return { grades, unitsByGrade, totalUnits, price };
+}
+
+async function dbGet(path) {
+  const r = await fetch(`${DB_URL}/${path}.json`);
+  return r.json();
+}
+async function dbPut(path, body) {
+  await fetch(`${DB_URL}/${path}.json`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+// ድረገጹ የሚጠቀምበት የ subject → Firebase አድራሻ
+const SUBJECT_DB = {
+  mathematics: { db: "https://mathematics-quiz-6884e-default-rtdb.firebaseio.com", path: "requests_math_allgrades" },
+  biology:     { db: "https://biology-quiz-f4100-default-rtdb.firebaseio.com", path: "requests_bio_allgrades" },
+  chemistry:   { db: "https://mathe-quiz-437d1-default-rtdb.firebaseio.com", path: "requests_chem_allgrades_reset_g12u2" },
+  economics:   { db: "https://economics---quiz-default-rtdb.firebaseio.com", path: "requests_economics_allgrades" },
+  geography:   { db: "https://geography-quiz-d8b97-default-rtdb.firebaseio.com", path: "requests_geography_allgrades" },
+  history:     { db: "https://history-quiz-e7489-default-rtdb.firebaseio.com", path: "requests_history_allgrades" },
+  physics:     { db: "https://physics-quiz-d8ff6-default-rtdb.firebaseio.com", path: "requests_physics_allgrades" },
+};
+
+// ተማሪው ደረሰኝ ሲልክ የሚፈጠረው ክፍያ ውስጥ dial/digits ያስቀምጣል (ድረገጹ ቁልፉን `251_952497862` ብሎ ነው የሚሠራው)
+function splitPhone(session) {
+  const cc = session.countryCode || "";
+  const full = String(session.phoneNumber || "").replace(/\D/g, "");
+  if (!cc || !full.startsWith(cc)) return { dial: "", digits: "" };
+  return { dial: cc, digits: full.slice(cc.length) };
+}
+
+// ክፍያ ሲረጋገጥ ተማሪውን በድረገጹ database ውስጥ approved አድርጎ unit ይከፍታል
+async function grantAccess(chatId, pay) {
+  const target = SUBJECT_DB[pay.subject];
+  if (!target) return { ok: false, reason: `ያልታወቀ subject: ${pay.subject}` };
+  if (!pay.dial || !pay.digits) {
+    return { ok: false, reason: "ስልኩ ከሌላ አገር ነው (country code አልታወቀም)፤ በ control page በእጅ ይክፈቱ" };
+  }
+  const key = `${pay.dial}_${pay.digits}`;
+  const url = `${target.db}/${target.path}/${key}.json`;
+
+  // የሚከፈቱ unit ቁልፎች (ለምሳሌ G9U1)
+  const newKeys = [];
+  Object.keys(pay.unitsByGrade || {}).forEach((g) => {
+    (pay.unitsByGrade[g] || []).forEach((n) => newKeys.push(`G${g}U${n}`));
+  });
+
+  const existing = await (await fetch(url)).json();
+
+  if (existing) {
+    const sameName =
+      String(existing.firstName || "").trim().toLowerCase() === String(pay.firstName).trim().toLowerCase() &&
+      String(existing.lastName || "").trim().toLowerCase() === String(pay.lastName).trim().toLowerCase();
+    if (!sameName) {
+      return { ok: false, reason: `ይህ ስልክ በድረገጹ በሌላ ስም (${existing.firstName} ${existing.lastName}) ተመዝግቧል` };
+    }
+  }
+
+  const merged = Array.from(new Set([...(existing && existing.unlockedUnits ? existing.unlockedUnits : []), ...newKeys]));
+  const body = existing
+    ? { status: "approved", unlockedUnits: merged }
+    : {
+        firstName: pay.firstName,
+        lastName: pay.lastName,
+        phone: `+${pay.dial} ${pay.digits}`,
+        status: "approved",
+        unlockedUnits: merged,
+        requestedAt: new Date().toISOString(),
+        approvedAt: new Date().toISOString(),
+        userAgent: "telegram-bot",
+      };
+  const r = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) return { ok: false, reason: `Firebase ስህተት ${r.status}` };
+  return { ok: true, count: newKeys.length };
+}
+
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
     res.status(200).send("ok");
@@ -348,6 +439,48 @@ module.exports = async function handler(req, res) {
     const data = cq.data;
     const { fullName, username } = personName(cq.from);
     const isAdminCq = String(chatId) === String(ADMIN_CHAT_ID);
+
+    if (data.startsWith("pay:")) {
+      if (!isAdminCq) {
+        await answerCallbackQuery(cq.id, "⛔", true);
+        res.status(200).send("ok");
+        return;
+      }
+      const [, action, studentId] = data.split(":");
+      const pay = await dbGet(`bot_payments/${studentId}`);
+      if (!pay || pay.status !== "pending") {
+        await answerCallbackQuery(cq.id, "ይህ ቀድሞ ተስተናግዷል ወይም አልተገኘም", true);
+        await editMarkup(chatId, cq.message.message_id, { inline_keyboard: [] });
+        res.status(200).send("ok");
+        return;
+      }
+      if (action === "ok") {
+        let result;
+        try { result = await grantAccess(studentId, pay); } catch (e) { result = { ok: false, reason: String(e) }; }
+        if (!result.ok) {
+          await answerCallbackQuery(cq.id, "⚠️ አልተከፈተም", true);
+          await sendMessage(chatId, `⚠️ <b>Access መክፈት አልተቻለም</b>\nChat ID: <code>${studentId}</code>\nምክንያት: ${result.reason}\n(በተኖቹ አሁንም ይሠራሉ፤ ችግሩን አስተካክለው በድጋሚ ይሞክሩ ወይም በ control page በእጅ ይክፈቱ)`);
+          res.status(200).send("ok");
+          return;
+        }
+        pay.status = "approved";
+        pay.decidedAt = Date.now();
+        await dbPut(`bot_payments/${studentId}`, pay);
+        await sendMessage(studentId, BN_HEADER + "✅ ክፍያዎ ተረጋግጧል! ለመረጡት subject እና unit access ተከፍቷል። ወደ application ገብተው ይጠቀሙ 🥰\n\n🙏 BN Academy 🙏");
+        await answerCallbackQuery(cq.id, "✅ Approved");
+        await editMarkup(chatId, cq.message.message_id, { inline_keyboard: [[{ text: "✅ Approved", callback_data: "noop" }]] });
+      } else {
+        pay.status = "rejected";
+        pay.decidedAt = Date.now();
+        await dbPut(`bot_payments/${studentId}`, pay);
+        await sendMessage(studentId, "❌ ክፍያዎን ማረጋገጥ አልተቻለም። እባክዎ ትክክለኛውን ደረሰኝ (screenshot) በድጋሚ ይላኩ ወይም መልእክትዎን ይጻፉልን 🙏");
+        await saveSession(studentId, { ...(await getSession(studentId)), step: "awaiting_payment" });
+        await answerCallbackQuery(cq.id, "❌ Rejected");
+        await editMarkup(chatId, cq.message.message_id, { inline_keyboard: [[{ text: "❌ Rejected", callback_data: "noop" }]] });
+      }
+      res.status(200).send("ok");
+      return;
+    }
 
     if (!isAdminCq) {
       const usage = await checkAndIncrementUsage(chatId);
@@ -552,6 +685,28 @@ module.exports = async function handler(req, res) {
           photo: fileId,
           caption: `🧾 <b>ደረሰኝ/Screenshot ደርሷል</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>\nApp First name: ${session.firstName || "-"}\nApp Last name: ${session.lastName || "-"}\nApp Phone: ${session.phoneNumber || "-"}${msg.caption ? `\n\n${msg.caption}` : ""}`,
           parse_mode: "HTML",
+          reply_markup: { inline_keyboard: [[
+            { text: "✅ Approve", callback_data: `pay:ok:${studentChatId}` },
+            { text: "❌ Reject", callback_data: `pay:no:${studentChatId}` },
+          ]] },
+        });
+      }
+      {
+        const t = sessionTotals(session);
+        await dbPut(`bot_payments/${studentChatId}`, {
+          status: "pending",
+          fileId,
+          firstName: session.firstName || "",
+          lastName: session.lastName || "",
+          phone: session.phoneNumber || "",
+          track: session.track || "",
+          subject: session.subject || "",
+          grades: t.grades,
+          unitsByGrade: t.unitsByGrade,
+          price: t.price,
+          dial: splitPhone(session).dial,
+          digits: splitPhone(session).digits,
+          createdAt: Date.now(),
         });
       }
       await sendMessage(studentChatId, "ደረሰኙ ደርሶናል ✅ መምህሩ አረጋግጦ በቅርቡ access ይሰጥዎታል 🙏");
