@@ -424,6 +424,8 @@ async function grantAccess(chatId, pay) {
 // ---------- OCR (OCR.space) ----------
 const OCR_KEY = process.env.OCR_SPACE_API_KEY;
 const AUTO_APPROVE = process.env.AUTO_APPROVE === "true";
+const AUTO_REJECT = process.env.AUTO_REJECT !== "false"; // default: ON
+const RECEIVER_DISPLAY = "MESELE SAMUEL ENDALE";
 const RECEIVER_NAME_TOKENS = ["MESELE", "SAMUEL", "ENDALE"];
 
 async function downloadTelegramFile(fileId) {
@@ -517,7 +519,8 @@ module.exports = async function handler(req, res) {
       }
       const [, action, studentId] = data.split(":");
       const pay = await dbGet(`bot_payments/${studentId}`);
-      if (!pay || pay.status !== "pending") {
+      const allowed = pay && (pay.status === "pending" || (action === "ok" && pay.status === "auto_rejected"));
+      if (!allowed) {
         await answerCallbackQuery(cq.id, "ይህ ቀድሞ ተስተናግዷል ወይም አልተገኘም", true);
         await editMarkup(chatId, cq.message.message_id, { inline_keyboard: [] });
         res.status(200).send("ok");
@@ -798,6 +801,7 @@ module.exports = async function handler(req, res) {
       // ---- OCR ----
       let verdict = "";
       let canAuto = false;
+      const rejectReasons = [];
       try {
         const ocrText = await ocrImage(forOcr.file_id);
         if (ocrText === null) {
@@ -811,6 +815,7 @@ module.exports = async function handler(req, res) {
             const fileUsed = await dbGet(`bot_files/${fileUniqueId}`);
             if (used || (fileUsed && String(fileUsed.chatId) !== String(studentChatId))) {
               txnLine = `🚫 <code>${a.txn}</code> ቀድሞ ጥቅም ላይ ውሏል!`;
+              rejectReasons.push("duplicate");
             } else {
               txnLine = `✅ <code>${a.txn}</code> አዲስ`;
               txnFresh = true;
@@ -818,6 +823,12 @@ module.exports = async function handler(req, res) {
             pay.txn = a.txn;
           }
           await dbPut(`bot_files/${fileUniqueId}`, { chatId: String(studentChatId), at: Date.now() });
+
+          // ደረሰኝ የሚመስል ጽሑፍ ከተነበበ ብቻ ነው በራስ-ሰር ውድቅ የሚያደርገው (ንባቡ ከተበላሸ በእጅ ይመለከታል)
+          const looksLikeReceipt = String(ocrText).length >= 40 && (a.amounts.length > 0 || !!a.txn);
+          if (looksLikeReceipt && a.amounts.length > 0 && !a.amountOk) rejectReasons.push("amount");
+          if (looksLikeReceipt && !a.receiverOk) rejectReasons.push("receiver");
+
           pay.ocr = { amountOk: a.amountOk, receiverOk: a.receiverOk, txn: a.txn || "" };
           await dbPut(`bot_payments/${studentChatId}`, pay);
           canAuto = a.amountOk && a.receiverOk && txnFresh;
@@ -832,9 +843,25 @@ module.exports = async function handler(req, res) {
         verdict = "\n\n🤖 OCR ስህተት ⚠️ በእጅ ይመልከቱ";
       }
 
+      // ---- ራስ-ሰር ውድቅ (ድጋሚ ደረሰኝ / የተሳሳተ መጠን / የተሳሳተ ተቀባይ) ----
+      let autoRejected = false;
+      if (AUTO_REJECT && rejectReasons.length) {
+        const lines = [];
+        if (rejectReasons.includes("duplicate")) lines.push("🚫 ይህ ደረሰኝ ቀድሞ አገልግሎት ላይ ውሏል። እባክዎ አዲስ ትክክለኛ ደረሰኝ ይላኩ።");
+        if (rejectReasons.includes("amount")) lines.push(`💰 በደረሰኙ ላይ ያለው መጠን ትክክል አይደለም። መክፈል ያለብዎት <b>${t.price} ብር</b> ነው።`);
+        if (rejectReasons.includes("receiver")) lines.push(`👤 ክፍያው ወደ ትክክለኛው ተቀባይ አልተላከም።\nስም፦ <b>${RECEIVER_DISPLAY}</b>\nAccount፦ <code>${ACCOUNT_NUMBER}</code>`);
+        pay.status = "auto_rejected";
+        pay.reason = rejectReasons.join(",");
+        pay.decidedAt = Date.now();
+        await dbPut(`bot_payments/${studentChatId}`, pay);
+        await sendMessage(studentChatId, "❌ <b>ክፍያዎ አልተረጋገጠም</b>\n\n" + lines.join("\n\n") + "\n\nትክክለኛውን ክፍያ ፈጽመው ደረሰኙን (screenshot) እንደገና ይላኩ 🙏");
+        autoRejected = true;
+        verdict += `\n\n🤖❌ <b>ራስ-ሰር ውድቅ ተደርጓል</b> (${rejectReasons.join(", ")})`;
+      }
+
       // ---- ራስ-ሰር approve (AUTO_APPROVE=true ሲሆን ብቻ) ----
       let autoDone = false;
-      if (AUTO_APPROVE && canAuto) {
+      if (AUTO_APPROVE && canAuto && !autoRejected) {
         const r = await approvePayment(studentChatId, pay);
         autoDone = r.ok;
         if (!r.ok) verdict += `\n⚠️ ራስ-ሰር መክፈት አልተሳካም: ${r.reason}`;
@@ -847,10 +874,14 @@ module.exports = async function handler(req, res) {
           photo: fileId,
           caption: `🧾 <b>ደረሰኝ/Screenshot ደርሷል</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>\nApp First name: ${session.firstName || "-"}\nApp Last name: ${session.lastName || "-"}\nApp Phone: ${session.phoneNumber || "-"}\nSubject: ${session.subject || "-"} | ${t.price} ብር${msg.caption ? `\n\n${msg.caption}` : ""}${verdict}`.slice(0, 1020),
           parse_mode: "HTML",
-          ...(autoDone ? {} : { reply_markup: { inline_keyboard: [[
-            { text: "✅ Approve", callback_data: `pay:ok:${studentChatId}` },
-            { text: "❌ Reject", callback_data: `pay:no:${studentChatId}` },
-          ]] } }),
+          ...(autoDone ? {} : autoRejected
+            ? (rejectReasons.includes("duplicate") ? {} : { reply_markup: { inline_keyboard: [[
+                { text: "✅ ቢሆንም Approve አድርግ", callback_data: `pay:ok:${studentChatId}` },
+              ]] } })
+            : { reply_markup: { inline_keyboard: [[
+                { text: "✅ Approve", callback_data: `pay:ok:${studentChatId}` },
+                { text: "❌ Reject", callback_data: `pay:no:${studentChatId}` },
+              ]] } }),
         });
       }
     }
