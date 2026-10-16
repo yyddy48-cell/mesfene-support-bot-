@@ -59,7 +59,12 @@ function countryKeyboard() {
   };
 }
 
-function getMaxUnits(subject, grade) {
+function getMaxUnits(subject, grade, track) {
+  if (subject === "all") {
+    const list = SUBJECTS[track] || [];
+    const vals = list.map((x) => getMaxUnits(x.key, grade));
+    return vals.length ? Math.max(...vals) : MAX_UNITS_PER_GRADE;
+  }
   if (subject === "mathematics") return MATH_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
   if (subject === "chemistry") return CHEM_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
   if (subject === "history") return HIST_MAX_UNITS_PER_GRADE[grade] || MAX_UNITS_PER_GRADE;
@@ -77,13 +82,14 @@ function isSubjectFull(session) {
   if (!ALL_GRADES.every((g) => grades.includes(g))) return false;
   const unitsByGrade = session.unitsByGrade || {};
   return ALL_GRADES.every((g) => {
-    const maxForGrade = getMaxUnits(session.subject, g);
+    const maxForGrade = getMaxUnits(session.subject, g, session.track);
     const selected = Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0;
     return selected >= maxForGrade;
   });
 }
 
 function computePrice(gradesCount, totalUnits, subject, session) {
+  if (subject === "all") return 800;
   if (subject === "mathematics" && session && isSubjectFull(session)) return 200;
   if (subject === "chemistry" && session && isSubjectFull(session)) return 200;
   if (subject === "history" && session && isSubjectFull(session)) return 200;
@@ -263,10 +269,21 @@ function trackKeyboard() {
 function subjectKeyboard(track) {
   const letters = ["A", "B", "C", "D"];
   return {
-    inline_keyboard: SUBJECTS[track].map((s, i) => [
-      { text: `${letters[i]}. ${s.label}`, callback_data: `subj:${s.key}` },
-    ]),
+    inline_keyboard: [
+      ...SUBJECTS[track].map((s, i) => [
+        { text: `${letters[i]}. ${s.label}`, callback_data: `subj:${s.key}` },
+      ]),
+      [{ text: "E. ☑️ ሁሉንም subject ምረጥ (Select all)", callback_data: "subj:all" }],
+    ],
   };
+}
+
+function namePromptText() {
+  return (
+    `እባክዎትን application ሲጠቀሙ ወደ premium future ሲገቡ የተጠቀሙበት first name, last name እና your phone ነበር የተጠቀሙበት ትክክለኛውን እራሱን spelling ሳይሳሳቱ ያስገቡ🙏\n` +
+    `ከረሱት application nave button ላይ አካውት የሚለውን በመንካት ከተዘረዘሩት ውስጥ my info(የኔ መረጃ) የሚለውን ነክተው copy የምትለዋን ነክተው copy አድርገው እዚ ላይ መለጠፍ(paste) ማድረግ ይችላሉ !! እባክዋ ያስገቡ🙏!?\n\n` +
+    `👉 <b>First name</b> ያስገቡ፦`
+  );
 }
 
 function gradeKeyboard(selectedGrades) {
@@ -278,6 +295,7 @@ function gradeKeyboard(selectedGrades) {
         const selected = selectedGrades.includes(g);
         return [{ text: `${selected ? "✅ " : ""}${letters[i]}. Grade ${g}`, callback_data: `grade:${g}` }];
       }),
+      [{ text: grades.every((g) => selectedGrades.includes(g)) ? "☑️ ሁሉንም grade አንሳ (Clear all)" : "☑️ ሁሉንም grade ምረጥ (Select all grades)", callback_data: "grades_all" }],
       [{ text: "✅ ጨርሻለሁ (Done)", callback_data: "grades_done" }],
     ],
   };
@@ -293,7 +311,7 @@ function unitsKeyboard(session) {
   const grades = [...session.grades].sort((a, b) => a - b);
   const unitsByGrade = session.unitsByGrade || {};
   const maxByGrade = {};
-  grades.forEach((g) => { maxByGrade[g] = getMaxUnits(session.subject, g); });
+  grades.forEach((g) => { maxByGrade[g] = getMaxUnits(session.subject, g, session.track); });
   const overallMax = Math.max(0, ...grades.map((g) => maxByGrade[g]));
   const rows = [];
   for (let n = 1; n <= overallMax; n++) {
@@ -371,20 +389,17 @@ function splitPhone(session) {
   return { dial: cc, digits: full.slice(cc.length) };
 }
 
-// ክፍያ ሲረጋገጥ ተማሪውን በድረገጹ database ውስጥ approved አድርጎ unit ይከፍታል
-async function grantAccess(chatId, pay) {
-  const target = SUBJECT_DB[pay.subject];
-  if (!target) return { ok: false, reason: `ያልታወቀ subject: ${pay.subject}` };
-  if (!pay.dial || !pay.digits) {
-    return { ok: false, reason: "ስልኩ ከሌላ አገር ነው (country code አልታወቀም)፤ በ control page በእጅ ይክፈቱ" };
-  }
+// አንድ subject ውስጥ ተማሪውን approved አድርጎ unit ይከፍታል
+async function grantOne(subject, pay, unitsByGrade) {
+  const target = SUBJECT_DB[subject];
+  if (!target) return { ok: false, reason: `ያልታወቀ subject: ${subject}` };
   const key = `${pay.dial}_${pay.digits}`;
   const url = `${target.db}/${target.path}/${key}.json`;
 
   // የሚከፈቱ unit ቁልፎች (ለምሳሌ G9U1)
   const newKeys = [];
-  Object.keys(pay.unitsByGrade || {}).forEach((g) => {
-    (pay.unitsByGrade[g] || []).forEach((n) => newKeys.push(`G${g}U${n}`));
+  Object.keys(unitsByGrade || {}).forEach((g) => {
+    (unitsByGrade[g] || []).forEach((n) => newKeys.push(`G${g}U${n}`));
   });
 
   const existing = await (await fetch(url)).json();
@@ -394,7 +409,7 @@ async function grantAccess(chatId, pay) {
       String(existing.firstName || "").trim().toLowerCase() === String(pay.firstName).trim().toLowerCase() &&
       String(existing.lastName || "").trim().toLowerCase() === String(pay.lastName).trim().toLowerCase();
     if (!sameName) {
-      return { ok: false, reason: `ይህ ስልክ በድረገጹ በሌላ ስም (${existing.firstName} ${existing.lastName}) ተመዝግቧል` };
+      return { ok: false, reason: `${subject}: ይህ ስልክ በድረገጹ በሌላ ስም (${existing.firstName} ${existing.lastName}) ተመዝግቧል` };
     }
   }
 
@@ -416,10 +431,33 @@ async function grantAccess(chatId, pay) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!r.ok) return { ok: false, reason: `Firebase ስህተት ${r.status}` };
+  if (!r.ok) return { ok: false, reason: `${subject}: Firebase ስህተት ${r.status}` };
   return { ok: true, count: newKeys.length };
 }
 
+// ክፍያ ሲረጋገጥ access ይከፍታል (subject = "all" ከሆነ የ track ውስጥ ያሉትን ሁሉንም subject ይከፍታል)
+async function grantAccess(chatId, pay) {
+  if (!pay.dial || !pay.digits) {
+    return { ok: false, reason: "ስልኩ ከሌላ አገር ነው (country code አልታወቀም)፤ በ control page በእጅ ይክፈቱ" };
+  }
+  if (pay.subject !== "all") return grantOne(pay.subject, pay, pay.unitsByGrade);
+
+  const list = SUBJECTS[pay.track] || [];
+  if (!list.length) return { ok: false, reason: `ያልታወቀ track: ${pay.track}` };
+  const failures = [];
+  for (const sub of list) {
+    // ተማሪው የመረጠውን grade/unit በዚህ subject ውስጥ ካለው ከፍተኛ ብዛት በላይ ሳይሆን ይከፍታል
+    const chosen = {};
+    Object.keys(pay.unitsByGrade || {}).forEach((g) => {
+      const max = getMaxUnits(sub.key, g);
+      chosen[g] = (pay.unitsByGrade[g] || []).filter((n) => n <= max);
+    });
+    const r = await grantOne(sub.key, pay, chosen);
+    if (!r.ok) failures.push(r.reason);
+  }
+  if (failures.length) return { ok: false, reason: failures.join(" | ") };
+  return { ok: true, count: list.length };
+}
 
 // ---------- OCR (OCR.space) ----------
 const OCR_KEY = process.env.OCR_SPACE_API_KEY;
@@ -583,7 +621,7 @@ module.exports = async function handler(req, res) {
       session.step = "subject";
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, "እሺ");
-      await sendMessage(chatId, "የትኛውን Subject ይፈልጋሉ?", { reply_markup: subjectKeyboard(session.track) });
+      await sendMessage(chatId, "የትኛውን Subject ይፈልጋሉ?\n(አንድ subject ብቻ መምረጥ ይችላሉ፤ ሁሉንም ከፈለጉ <b>Select all</b> ይጫኑ 👇)", { reply_markup: subjectKeyboard(session.track) });
       res.status(200).send("ok");
       return;
     }
@@ -617,6 +655,38 @@ module.exports = async function handler(req, res) {
       return;
     }
 
+    if (data === "grades_all") {
+      const everyGrade = [9, 10, 11, 12];
+      const allSel = Array.isArray(session.grades) && everyGrade.every((g) => session.grades.includes(g));
+      session.grades = allSel ? [] : [...everyGrade];
+      if (allSel) session.unitsByGrade = {};
+      await saveSession(chatId, session);
+      await answerCallbackQuery(cq.id, allSel ? "ተነስቷል" : "ሁሉም grade ተመርጧል ✅");
+      await editMarkup(chatId, cq.message.message_id, gradeKeyboard(session.grades));
+      res.status(200).send("ok");
+      return;
+    }
+
+    if (data === "units_all_subjects") {
+      if (session.subject !== "all" || !session.grades || session.grades.length === 0) {
+        await answerCallbackQuery(cq.id, "🙏", true);
+        res.status(200).send("ok");
+        return;
+      }
+      session.unitsByGrade = {};
+      session.grades.forEach((g) => {
+        const max = getMaxUnits("all", g, session.track);
+        session.unitsByGrade[g] = Array.from({ length: max }, (_, i) => i + 1);
+      });
+      session.step = "awaiting_first_name";
+      await saveSession(chatId, session);
+      await answerCallbackQuery(cq.id, "ሁሉም unit ተመርጧል ✅");
+      await editMarkup(chatId, cq.message.message_id, { inline_keyboard: [[{ text: "✅ ሁሉም unit ተመርጧል", callback_data: "noop" }]] });
+      await sendMessage(chatId, namePromptText());
+      res.status(200).send("ok");
+      return;
+    }
+
     if (data === "grades_done") {
       if (!session.grades || session.grades.length === 0) {
         await answerCallbackQuery(cq.id, "ቢያንስ አንድ grade ይምረጡ 🙏", true);
@@ -624,12 +694,27 @@ module.exports = async function handler(req, res) {
         return;
       }
       await answerCallbackQuery(cq.id, "እሺ");
+      if (session.subject === "all") {
+        const gs = [...session.grades].sort((a, b) => a - b);
+        session.step = "confirm_all_units";
+        session.unitsByGrade = {};
+        await saveSession(chatId, session);
+        await sendMessage(
+          chatId,
+          `📚 <b>ሁሉም subjects (4)</b> | ${gs.map((g) => `Grade ${g}`).join(", ")}\n\n` +
+            `ለመረጧቸው ለሁሉም subject እና grade <b>ሁሉም unit ክፍት ይሆንልዎታል</b> ✅\n` +
+            `ለመቀጠል ከታች ያለውን button ይጫኑ 👇`,
+          { reply_markup: { inline_keyboard: [[{ text: "☑️ Select all units per grade & subject", callback_data: "units_all_subjects" }]] } }
+        );
+        res.status(200).send("ok");
+        return;
+      }
       session.step = "units";
       session.unitsByGrade = {};
       session.grades.forEach((g) => { session.unitsByGrade[g] = []; });
 
       const grades = [...session.grades].sort((a, b) => a - b);
-      const subjLabel = subjectLabel(session.track, session.subject);
+      const subjLabel = session.subject === "all" ? "📚 ሁሉም subjects (4)" : subjectLabel(session.track, session.subject);
       const gradeStr = grades.map((g) => `Grade ${g}`).join(" and ");
 
       const sent = await sendMessage(chatId, `ከ ${subjLabel} ${gradeStr} የሚፈልጉትን የ unit quiz (ጥያቄ) ብዛት ይምረጡ? 🥰\n\nG = Grade, U = Unit`, { reply_markup: unitsKeyboard(session) });
@@ -651,7 +736,7 @@ module.exports = async function handler(req, res) {
       const n = parseInt(parts[2], 10);
       if (!session.unitsByGrade) session.unitsByGrade = {};
       if (!Array.isArray(session.unitsByGrade[g])) session.unitsByGrade[g] = [];
-      const maxUnits = getMaxUnits(session.subject, g);
+      const maxUnits = getMaxUnits(session.subject, g, session.track);
       const subjLabelWarn = subjectLabel(session.track, session.subject);
       if (n > maxUnits) {
         await answerCallbackQuery(cq.id, `የ grade ${g} ${subjLabelWarn} ትምህርት ${maxUnits} unit ብቻ ነው ያለው 🙏`, true);
@@ -676,11 +761,11 @@ module.exports = async function handler(req, res) {
       if (!session.unitsByGrade) session.unitsByGrade = {};
       const gradesSel = session.grades || [];
       const allSelectedNow = gradesSel.length > 0 && gradesSel.every((g) => {
-        const max = getMaxUnits(session.subject, g);
+        const max = getMaxUnits(session.subject, g, session.track);
         return Array.isArray(session.unitsByGrade[g]) && session.unitsByGrade[g].length >= max;
       });
       gradesSel.forEach((g) => {
-        const max = getMaxUnits(session.subject, g);
+        const max = getMaxUnits(session.subject, g, session.track);
         session.unitsByGrade[g] = allSelectedNow ? [] : Array.from({ length: max }, (_, i) => i + 1);
       });
       await saveSession(chatId, session);
@@ -702,12 +787,7 @@ module.exports = async function handler(req, res) {
       await answerCallbackQuery(cq.id, "ተልኳል ✅");
       session.step = "awaiting_first_name";
       await saveSession(chatId, session);
-      await sendMessage(
-        chatId,
-        `እባክዎትን application ሲጠቀሙ ወደ premium future ሲገቡ የተጠቀሙበት first name, last name እና your phone ነበር የተጠቀሙበት ትክክለኛውን እራሱን spelling ሳይሳሳቱ ያስገቡ🙏\n` +
-        `ከረሱት application nave button ላይ አካውት የሚለውን በመንካት ከተዘረዘሩት ውስጥ my info(የኔ መረጃ) የሚለውን ነክተው copy የምትለዋን ነክተው copy አድርገው እዚ ላይ መለጠፍ(paste) ማድረግ ይችላሉ !! እባክዋ ያስገቡ🙏!?\n\n` +
-        `👉 <b>First name</b> ያስገቡ፦`
-      );
+      await sendMessage(chatId, namePromptText());
       res.status(200).send("ok");
       return;
     }
@@ -987,11 +1067,13 @@ module.exports = async function handler(req, res) {
       let totalUnits = 0;
       grades.forEach((g) => { totalUnits += Array.isArray(unitsByGrade[g]) ? unitsByGrade[g].length : 0; });
       const price = computePrice(grades.length, totalUnits, session.subject, session);
-      const subjLabel = subjectLabel(session.track, session.subject);
+      const subjLabel = session.subject === "all" ? "📚 ሁሉም subjects (4)" : subjectLabel(session.track, session.subject);
       let unitsSummary = "";
       grades.forEach((g) => {
         const units = (unitsByGrade[g] || []).sort((a, b) => a - b);
-        unitsSummary += `  Grade ${g}: ${units.length > 0 ? "Unit " + units.join(", ") : "—"}\n`;
+        unitsSummary += session.subject === "all"
+          ? `  Grade ${g}: ሁሉም unit (ለአራቱም subject)\n`
+          : `  Grade ${g}: ${units.length > 0 ? "Unit " + units.join(", ") : "—"}\n`;
       });
       await notifyAdmin(
         `🧾 <b>የምዝገባ ማጠቃለያ</b>\nከ: ${fullName || "ስም የለም"} (${username})\nChat ID: <code>${studentChatId}</code>\n` +
