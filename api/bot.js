@@ -266,14 +266,15 @@ function trackKeyboard() {
   };
 }
 
-function subjectKeyboard(track) {
+function subjectKeyboard(track, selected) {
   const letters = ["A", "B", "C", "D"];
   return {
     inline_keyboard: [
       ...SUBJECTS[track].map((s, i) => [
-        { text: `${letters[i]}. ${s.label}`, callback_data: `subj:${s.key}` },
+        { text: `${selected === s.key ? "✅ " : ""}${letters[i]}. ${s.label}`, callback_data: `subj:${s.key}` },
       ]),
-      [{ text: "E. ☑️ ሁሉንም subject ምረጥ (Select all)", callback_data: "subj:all" }],
+      [{ text: selected === "all" ? "✅ ሁሉንም subject ተመርጧል (ለማንሳት ይንኩ)" : "☑️ ሁሉንም subject ምረጥ (Select all subjects)", callback_data: "subj:all" }],
+      [{ text: "✅ ጨርሻለሁ (Done)", callback_data: "subj_done" }],
     ],
   };
 }
@@ -621,19 +622,37 @@ module.exports = async function handler(req, res) {
       session.step = "subject";
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, "እሺ");
-      await sendMessage(chatId, "የትኛውን Subject ይፈልጋሉ?\n(አንድ subject ብቻ መምረጥ ይችላሉ፤ ሁሉንም ከፈለጉ <b>Select all</b> ይጫኑ 👇)", { reply_markup: subjectKeyboard(session.track) });
+      await sendMessage(chatId, "የትኛውን Subject ይፈልጋሉ?\n(አንድ subject ብቻ መምረጥ ይችላሉ፤ ሁሉንም ከፈለጉ <b>Select all</b> ይጫኑ፤ ከመረጡ በኋላ <b>ጨርሻለሁ</b> ይጫኑ 👇)", { reply_markup: subjectKeyboard(session.track) });
       res.status(200).send("ok");
       return;
     }
 
-    if (data.startsWith("subj:")) {
-      session.subject = data.split(":")[1];
+    if (data === "subj_done") {
+      if (!session.subject) {
+        await answerCallbackQuery(cq.id, "ቢያንስ አንድ subject ይምረጡ 🙏", true);
+        res.status(200).send("ok");
+        return;
+      }
       session.step = "grade";
       session.grades = [];
       session.unitsByGrade = {};
       await saveSession(chatId, session);
       await answerCallbackQuery(cq.id, "እሺ");
+      await editMarkup(chatId, cq.message.message_id, { inline_keyboard: [[{ text: session.subject === "all" ? "✅ ሁሉም subject" : `✅ ${subjectLabel(session.track, session.subject)}`, callback_data: "noop" }]] });
       await sendMessage(chatId, "የስንተኛ ክፍል ነዎት? (ከ1 እስከ 4 grade መምረጥ ይችላሉ)\nከመረጡ በኋላ <b>ጨርሻለሁ</b> ይጫኑ።", { reply_markup: gradeKeyboard(session.grades) });
+      res.status(200).send("ok");
+      return;
+    }
+
+    if (data.startsWith("subj:")) {
+      // አንድ subject ብቻ (ወይም ሁሉንም) ይመረጣል፤ እንደገና ሲነካ ይነሳል፣ ሌላ ሲነካ ይተካል
+      const picked = data.split(":")[1];
+      const already = session.subject === picked;
+      session.subject = already ? "" : picked;
+      session.step = "subject";
+      await saveSession(chatId, session);
+      await answerCallbackQuery(cq.id, already ? "ተነስቷል" : "ተመርጧል ✅");
+      await editMarkup(chatId, cq.message.message_id, subjectKeyboard(session.track, session.subject));
       res.status(200).send("ok");
       return;
     }
