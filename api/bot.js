@@ -271,7 +271,7 @@ function subjectKeyboard(track, selected) {
   return {
     inline_keyboard: [
       ...SUBJECTS[track].map((s, i) => [
-        { text: `${selected === s.key ? "✅ " : ""}${letters[i]}. ${s.label}`, callback_data: `subj:${s.key}` },
+        { text: `${selected === s.key || selected === "all" ? "✅ " : ""}${letters[i]}. ${s.label}`, callback_data: `subj:${s.key}` },
       ]),
       [{ text: selected === "all" ? "✅ ሁሉንም subject ተመርጧል (ለማንሳት ይንኩ)" : "☑️ ሁሉንም subject ምረጥ (Select all subjects)", callback_data: "subj:all" }],
       [{ text: "✅ ጨርሻለሁ (Done)", callback_data: "subj_done" }],
