@@ -89,7 +89,11 @@ function isSubjectFull(session) {
 }
 
 function computePrice(gradesCount, totalUnits, subject, session) {
-  if (subject === "all") return 800;
+  if (subject === "all") {
+    // ሁሉም subject (4) + የመረጠው grade ሁሉም unit
+    const ALL_SUBJECTS_PRICE = { 1: 400, 2: 500, 3: 580, 4: 800 };
+    return ALL_SUBJECTS_PRICE[gradesCount] || 400;
+  }
   if (subject === "mathematics" && session && isSubjectFull(session)) return 200;
   if (subject === "chemistry" && session && isSubjectFull(session)) return 200;
   if (subject === "history" && session && isSubjectFull(session)) return 200;
