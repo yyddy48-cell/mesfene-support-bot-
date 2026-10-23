@@ -4,7 +4,7 @@
 
 const TELEGRAM_API = `https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}`;
 const ADMIN_CHAT_ID = process.env.ADMIN_CHAT_ID;
-const ACCOUNT_NUMBER = "1000102646437";
+const ACCOUNT_NUMBER = "1000232716723";
 const BN_HEADER = "✨🎓📚 <b>𝗕𝗡 𝗔𝗖𝗔𝗗𝗘𝗠𝗬</b> 📚🎓✨\n•▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬•\n\n";
 const DB_URL = "https://chemistry-quiz-b0389-default-rtdb.firebaseio.com";
 
@@ -345,7 +345,7 @@ async function sendFinalInstructions(chatId, session) {
   const text =
     `✅ ገብቷል፦ <b>${session.firstName || "-"} ${session.lastName || "-"}</b> | ${session.phoneNumber || "-"}\n\n` +
     `ሰላም 🥰?\n` +
-    `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code> (mesele samuel endale)\n\n` +
+    `መጀመርያ በዚህ Account number <code>${ACCOUNT_NUMBER}</code> (MEKDES SEIFU WANORE — Commercial Bank of Ethiopia)\n\n` +
     `<b>${price} ብር</b> ገቢ ካደረጉ በኋላ የከፈሉበትን ደረሰኝ ወይም screenshot ወደዚህ ወደዚሁ chat በመላክ የመረጡትን subject መምህሩ ተመልክቶ ክፍያዎን ካረጋገጠ በኋላ በቅርቡ ለመረጡት subject እና unit access ይሰጥዎታል። 🥰\n\n` +
     `🙏🙏🙏🙏🙏🙏🙏BN academy 🙏🙏🙏🙏🙏🙏🙏`;
 
@@ -468,8 +468,8 @@ async function grantAccess(chatId, pay) {
 const OCR_KEY = process.env.OCR_SPACE_API_KEY;
 const AUTO_APPROVE = process.env.AUTO_APPROVE === "true";
 const AUTO_REJECT = process.env.AUTO_REJECT !== "false"; // default: ON
-const RECEIVER_DISPLAY = "MESELE SAMUEL ENDALE";
-const RECEIVER_NAME_TOKENS = ["MESELE", "SAMUEL", "ENDALE"];
+const RECEIVER_DISPLAY = "MEKDES SEIFU WANORE";
+const RECEIVER_NAME_TOKENS = ["MEKDES", "SEIFU", "WANORE"];
 
 async function downloadTelegramFile(fileId) {
   const info = await tg("getFile", { file_id: fileId });
