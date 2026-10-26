@@ -378,13 +378,38 @@ async function dbPut(path, body) {
 // ድረገጹ የሚጠቀምበት የ subject → Firebase አድራሻ
 const SUBJECT_DB = {
   mathematics: { db: "https://mathematics-quiz-6884e-default-rtdb.firebaseio.com", path: "requests_math_allgrades" },
-  biology:     { db: "https://biology-quiz-f4100-default-rtdb.firebaseio.com", path: "requests_bio_allgrades" },
-  chemistry:   { db: "https://mathe-quiz-437d1-default-rtdb.firebaseio.com", path: "requests_chem_allgrades_reset_g12u2" },
-  economics:   { db: "https://economics---quiz-default-rtdb.firebaseio.com", path: "requests_economics_allgrades" },
-  geography:   { db: "https://geography-quiz-d8b97-default-rtdb.firebaseio.com", path: "requests_geography_allgrades" },
-  history:     { db: "https://history-quiz-e7489-default-rtdb.firebaseio.com", path: "requests_history_allgrades" },
   physics:     { db: "https://physics-quiz-d8ff6-default-rtdb.firebaseio.com", path: "requests_physics_allgrades" },
+  // ከታች ያሉት አምስቱ subject በድረገጹ admin login (email/password) ይጠይቃሉ
+  biology:     { db: "https://biology-quiz-f4100-default-rtdb.firebaseio.com", path: "requests_bio_allgrades", apiKey: "AIzaSyAifBDlDx7MpAbnUh0jYPUd8fnyO4A_Vv4" },
+  chemistry:   { db: "https://mathe-quiz-437d1-default-rtdb.firebaseio.com", path: "requests_chem_allgrades_reset_g12u2", apiKey: "AIzaSyDrYKG1FRr8A4uW5JKwgnB3DvjCXyLL8Z0" },
+  economics:   { db: "https://economics---quiz-default-rtdb.firebaseio.com", path: "requests_economics_allgrades", apiKey: "AIzaSyBg3GMbP2zTLMkCi5xUXIF4fzJn0Sga1BY" },
+  geography:   { db: "https://geography-quiz-d8b97-default-rtdb.firebaseio.com", path: "requests_geography_allgrades", apiKey: "AIzaSyBLvamZHaG9VNG1K2RebE5M4mhPowd0A1c" },
+  history:     { db: "https://history-quiz-e7489-default-rtdb.firebaseio.com", path: "requests_history_allgrades", apiKey: "AIzaSyCBql9NNWOaQHCauSj4xdXHriNZTrCkyZI" },
 };
+
+// Firebase admin login (Vercel env: FB_ADMIN_EMAIL, FB_ADMIN_PASSWORD)
+// subject የተለየ ከሆነ፦ FB_ADMIN_EMAIL_CHEMISTRY / FB_ADMIN_PASSWORD_CHEMISTRY ወዘተ.
+const _tokenCache = {};
+async function fbToken(subject, apiKey) {
+  const c = _tokenCache[subject];
+  if (c && c.exp > Date.now()) return { token: c.token };
+  const K = subject.toUpperCase();
+  const email = process.env[`FB_ADMIN_EMAIL_${K}`] || process.env.FB_ADMIN_EMAIL;
+  const password = process.env[`FB_ADMIN_PASSWORD_${K}`] || process.env.FB_ADMIN_PASSWORD;
+  if (!email || !password) return { error: "FB_ADMIN_EMAIL / FB_ADMIN_PASSWORD በ Vercel ላይ አልተቀመጡም" };
+  const r = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, returnSecureToken: true }),
+  });
+  const d = await r.json();
+  if (!r.ok || !d.idToken) {
+    return { error: `${subject}: admin login አልተሳካም (${(d.error && d.error.message) || r.status})` };
+  }
+  _tokenCache[subject] = { token: d.idToken, exp: Date.now() + 45 * 60 * 1000 };
+  return { token: d.idToken };
+}
+
 
 // ተማሪው ደረሰኝ ሲልክ የሚፈጠረው ክፍያ ውስጥ dial/digits ያስቀምጣል (ድረገጹ ቁልፉን `251_952497862` ብሎ ነው የሚሠራው)
 function splitPhone(session) {
@@ -399,7 +424,12 @@ async function grantOne(subject, pay, unitsByGrade) {
   const target = SUBJECT_DB[subject];
   if (!target) return { ok: false, reason: `ያልታወቀ subject: ${subject}` };
   const key = `${pay.dial}_${pay.digits}`;
-  const url = `${target.db}/${target.path}/${key}.json`;
+  let url = `${target.db}/${target.path}/${key}.json`;
+  if (target.apiKey) {
+    const t = await fbToken(subject, target.apiKey);
+    if (t.error) return { ok: false, reason: t.error };
+    url += `?auth=${encodeURIComponent(t.token)}`;
+  }
 
   // የሚከፈቱ unit ቁልፎች (ለምሳሌ G9U1)
   const newKeys = [];
@@ -407,7 +437,9 @@ async function grantOne(subject, pay, unitsByGrade) {
     (unitsByGrade[g] || []).forEach((n) => newKeys.push(`G${g}U${n}`));
   });
 
-  const existing = await (await fetch(url)).json();
+  const gr = await fetch(url);
+  if (!gr.ok) return { ok: false, reason: `${subject}: ማንበብ አልተቻለም (Firebase ${gr.status})` };
+  const existing = await gr.json();
 
   if (existing) {
     const sameName =
