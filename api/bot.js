@@ -23,16 +23,16 @@ const MAX_COMPLETIONS_PER_DAY = 4; // ሙሉ ምዝገባ (registration) በቀ�
 
 const SUBJECTS = {
   social: [
-    { key: "mathematics", label: "Mathematics" },
-    { key: "geography", label: "Geography" },
-    { key: "history", label: "History" },
-    { key: "economics", label: "Economics" },
+    { key: "mathematics", label: "📐 Mathematics" },
+    { key: "geography", label: "🌍 Geography" },
+    { key: "history", label: "📜 History" },
+    { key: "economics", label: "💰 Economics" },
   ],
   natural: [
-    { key: "mathematics", label: "Mathematics" },
-    { key: "physics", label: "Physics" },
-    { key: "chemistry", label: "Chemistry" },
-    { key: "biology", label: "Biology" },
+    { key: "mathematics", label: "📐 Mathematics" },
+    { key: "physics", label: "⚡ Physics" },
+    { key: "chemistry", label: "⚗️ Chemistry" },
+    { key: "biology", label: "🧬 Biology" },
   ],
 };
 
@@ -264,8 +264,8 @@ async function notifyAdmin(text) {
 function trackKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: "A. Social subject", callback_data: "track:social" }],
-      [{ text: "B. Natural subject", callback_data: "track:natural" }],
+      [{ text: "A. 🏛️📖 Social subject", callback_data: "track:social" }],
+      [{ text: "B. 🧪🔬 Natural subject", callback_data: "track:natural" }],
     ],
   };
 }
