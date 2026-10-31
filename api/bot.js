@@ -291,6 +291,9 @@ function namePromptText() {
   );
 }
 
+// ለእያንዳንዱ grade የተመደበ ቀለም
+const GRADE_COLOR = { 9: "🟩", 10: "🟨", 11: "🟥", 12: "🟦" };
+
 function gradeKeyboard(selectedGrades) {
   const grades = [9, 10, 11, 12];
   const letters = ["A", "B", "C", "D"];
@@ -298,7 +301,7 @@ function gradeKeyboard(selectedGrades) {
     inline_keyboard: [
       ...grades.map((g, i) => {
         const selected = selectedGrades.includes(g);
-        return [{ text: `${selected ? "✅ " : ""}${letters[i]}. Grade ${g}`, callback_data: `grade:${g}` }];
+        return [{ text: `${selected ? "✅ " : ""}${GRADE_COLOR[g]} ${letters[i]}. Grade ${g}`, callback_data: `grade:${g}` }];
       }),
       [{ text: grades.every((g) => selectedGrades.includes(g)) ? "☑️ ሁሉንም grade አንሳ (Clear all)" : "☑️ ሁሉንም grade ምረጥ (Select all grades)", callback_data: "grades_all" }],
       [{ text: "✅ ጨርሻለሁ (Done)", callback_data: "grades_done" }],
@@ -325,7 +328,7 @@ function unitsKeyboard(session) {
         return { text: " ", callback_data: "noop" };
       }
       const selected = Array.isArray(unitsByGrade[g]) && unitsByGrade[g].includes(n);
-      return { text: `${selected ? "✅ " : ""}G${g}-U${n}`, callback_data: `unit:${g}:${n}` };
+      return { text: `${selected ? "✅" : GRADE_COLOR[g]} G${g}-U${n}`, callback_data: `unit:${g}:${n}` };
     });
     rows.push(row);
   }
